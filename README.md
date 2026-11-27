@@ -1,5 +1,10 @@
 # pocket-modeling
 
+<p align="center">
+  <img src="docs/assets/pocket-modeling-promo.svg" alt="pocket-modeling 紹介動画: 話しかけるだけでドメインモデルが育ち、検証済みの YAML と閲覧用 HTML になる" width="880">
+</p>
+
+
 EventStorming／DDD のドメインモデリングと、Kimball 流ディメンショナル・モデリングを **対話で進めるためのファシリテータースキル一式** を抱えるナレッジリポジトリ。アプリケーションコードは持たず、AI（Claude Code）と人間がモデルを育てるための仕組みと、その生成物だけを管理する。
 
 | 軸 | スキル | 何のモデルか | ソース・オブ・トゥルース |
