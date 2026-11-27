@@ -5,7 +5,7 @@
        反映エリア  #grill-model  … 回答がモデルに反映されたかどうかを表示（この下がモデル本体）
      - 質問:  db `grill/current`  {questions: [...]} … Claude が ArtifactData で書く（閲覧者は読むだけ）
      - 反映:  db `grill/progress` {reflected: {<qid>: {summary, at}}} … Claude が書く
-     - 回答:  db `answers/<qid>--<uid>` … 閲覧者がこのパネルから書く
+     - 回答:  db `answers/<qid>--<uid>` … 閲覧者がこのパネルから書く（choices[] ＋ 単一選択時は互換用 choice）
      - 通知:  回答保存後、comments.sendToClaude でこのページを見張っている Claude のセッションを起こす
      仕様は SKILL.md「Artifact 上のグリル」を参照。DML 由来の内容は一切含まない（固定スニペット）。
      ============================================================ -->
@@ -40,8 +40,16 @@
   }
   .gr-opt:hover { border-color: #90A4AE; }
   .gr-opt[aria-pressed="true"] { background: var(--gr-pick); border-color: var(--gr-pick-line); }
-  .gr-opt-label { font-weight: 700; }
+  .gr-opt-head { display: flex; gap: 8px; align-items: baseline; }
+  .gr-opt-key {
+    flex: none; min-width: 1.6em; text-align: center; font-weight: 700; font-size: 0.8125rem;
+    padding: 0 4px; border-radius: 4px; background: #ECEFF1; color: var(--gr-sub);
+  }
+  .gr-opt[aria-pressed="true"] .gr-opt-key { background: var(--gr-pick-line); color: #fff; }
+  .gr-opt-label { font-weight: 700; overflow-wrap: anywhere; }
+  .gr-opt-desc { padding-left: calc(1.6em + 8px); }
   .gr-opt-desc { font-size: 0.8125rem; color: var(--gr-sub); }
+  .gr-multi { font-size: 0.8125rem; font-weight: 700; color: var(--gr-pick-line); }
   .gr-label { font-size: 0.875rem; font-weight: 700; display: block; margin-bottom: 4px; }
   .gr-text {
     font: inherit; width: 100%; min-height: 5.2em; resize: vertical;
@@ -164,7 +172,7 @@
   var S = {
     db: null, user: null, uid: null, canWrite: true,
     board: null, boardLoaded: false, reflected: {}, answers: [], names: {},
-    sel: null, redo: '', busy: false, formErr: '',
+    sel: [], redo: '', busy: false, formErr: '',
     last: null,          // 直前に送った回答 {qid, line}
     notify: '',          // '' | 'sending' | 'ok' | {code, detail}
     notifiedAt: 0, unavailable: '', stale: false, viewKey: ''
@@ -200,10 +208,18 @@
   function othersFor(qid) {
     return S.answers.filter(function (a) { return a.qid === qid && a.by !== S.uid; });
   }
+  // 回答ドキュメントの選択を配列で返す（choices[] 優先、旧形式の choice 単一にも対応）
+  function choicesOf(a) {
+    if (!a) return [];
+    if (Array.isArray(a.choices)) return a.choices.filter(function (c) { return str(c); });
+    return str(a.choice) ? [a.choice] : [];
+  }
+  function keyOf(i) { return i < 26 ? String.fromCharCode(97 + i) + '.' : (i + 1) + '.'; }
   function answerLine(a) {
     if (a.hint) return '？（ヒントがほしい）';
     var parts = [];
-    if (str(a.choice)) parts.push(a.choice);
+    var cs = choicesOf(a);
+    if (cs.length) parts.push(cs.join('、'));
     if (str(a.text)) parts.push(a.text);
     return parts.join(' ／ ') || '（空の回答）';
   }
@@ -227,7 +243,7 @@
   function render() {
     var v = view();
     var q = v === 'form' ? current() : null;
-    var sig = q ? JSON.stringify([q.qid, q.text, q.why, q.hint, q.phase, q.options]) : str(S.board && S.board.note);
+    var sig = q ? JSON.stringify([q.qid, q.text, q.why, q.hint, q.phase, q.options, q.multi === true]) : str(S.board && S.board.note);
     var key = [v, sig, S.canWrite, S.stale].join('|');
     if (key !== S.viewKey) {
       S.viewKey = key;
@@ -276,24 +292,33 @@
     }
     var prev = mine(q.qid);   // やり直しのときだけ存在する
     var opts = Array.isArray(q.options) ? q.options : [];
-    S.sel = prev && str(prev.choice) ? prev.choice : null;
+    var multi = q.multi === true;
+    S.sel = choicesOf(prev);   // 選択中ラベルの配列（単一選択なら高々 1 件）
 
     if (opts.length) {
+      if (multi) body.appendChild(el('p', 'gr-multi', '当てはまるものをすべて選べます（複数選択可）'));
       var grid = el('div', 'gr-opts');
-      opts.forEach(function (o, i) {
+      var btns = [];
+      var n = 0;
+      opts.forEach(function (o) {
         var label = str(o && o.label);
         if (!label) return;
         var b = el('button', 'gr-opt');
         b.type = 'button';
-        b.id = 'grill-opt-' + i;
-        b.setAttribute('aria-pressed', String(S.sel === label));
-        b.appendChild(el('span', 'gr-opt-label', label));
+        b.id = 'grill-opt-' + n;
+        b.setAttribute('aria-pressed', String(S.sel.indexOf(label) >= 0));
+        var head = el('span', 'gr-opt-head');
+        head.appendChild(el('span', 'gr-opt-key', keyOf(n)));
+        head.appendChild(el('span', 'gr-opt-label', label));
+        b.appendChild(head);
         if (str(o.desc)) b.appendChild(el('span', 'gr-opt-desc', o.desc));
+        btns.push({ b: b, label: label });
+        n++;
         b.addEventListener('click', function () {
-          S.sel = (S.sel === label) ? null : label;
-          Array.prototype.forEach.call(grid.children, function (c) {
-            c.setAttribute('aria-pressed', String(c === b && S.sel === label));
-          });
+          var at = S.sel.indexOf(label);
+          if (multi) { if (at >= 0) S.sel.splice(at, 1); else S.sel.push(label); }
+          else S.sel = at >= 0 ? [] : [label];
+          btns.forEach(function (x) { x.b.setAttribute('aria-pressed', String(S.sel.indexOf(x.label) >= 0)); });
         });
         grid.appendChild(b);
       });
@@ -301,11 +326,11 @@
     }
 
     var wrap = el('div');
-    var lab = el('label', 'gr-label', opts.length ? '自分の言葉で答える・補足する（任意）' : 'あなたの答え');
+    var lab = el('label', 'gr-label', opts.length ? '自分の言葉で答える・補足する（任意）。a. b. … の記号で答えても構いません（例「a と c、ただし…」）' : 'あなたの答え');
     lab.htmlFor = 'grill-text';
     var ta = el('textarea', 'gr-text');
     ta.id = 'grill-text';
-    ta.placeholder = '現場の言葉のままで大丈夫です。例外や迷いもそのまま書いてください。';
+    ta.placeholder = opts.length ? '例：「a と c、ただし繁忙期は…」。現場の言葉のままで大丈夫です。' : '現場の言葉のままで大丈夫です。例外や迷いもそのまま書いてください。';
     if (prev && str(prev.text) && !prev.hint) ta.value = prev.text;
     wrap.appendChild(lab); wrap.appendChild(ta);
     body.appendChild(wrap);
@@ -317,11 +342,11 @@
     hint.type = 'button'; hint.id = 'grill-hint';
     send.addEventListener('click', function () {
       var text = ta.value.trim();
-      if (!S.sel && !text) { showFormErr('選択肢を選ぶか、答えを書いてから送ってください。'); return; }
-      submit(q, { choice: S.sel || '', text: text, hint: false }, [send, hint]);
+      if (!S.sel.length && !text) { showFormErr('選択肢を選ぶか、答えを書いてから送ってください。'); return; }
+      submit(q, { choices: S.sel.slice(), text: text, hint: false }, [send, hint]);
     });
     hint.addEventListener('click', function () {
-      submit(q, { choice: '', text: ta.value.trim(), hint: true }, [send, hint]);
+      submit(q, { choices: [], text: ta.value.trim(), hint: true }, [send, hint]);
     });
     row.appendChild(send); row.appendChild(hint);
     body.appendChild(row);
@@ -454,11 +479,13 @@
     S.busy = true; showFormErr('');
     buttons.forEach(function (b) { b.disabled = true; });
     var doc = {
-      qid: q.qid, by: S.uid, choice: ans.choice, text: ans.text, hint: ans.hint,
+      qid: q.qid, by: S.uid, choices: ans.choices,
+      choice: ans.choices.length === 1 ? ans.choices[0] : '',   // 旧形式との互換（単一選択のときだけ）
+      text: ans.text, hint: ans.hint,
       question: str(q.text), phase: str(q.phase), at: new Date().toISOString()
     };
     S.db.collection('answers').doc(q.qid + '--' + S.uid).set(doc).then(function () {
-      S.busy = false; S.redo = ''; S.sel = null;
+      S.busy = false; S.redo = ''; S.sel = [];
       // スナップショット到着を待たずに次の質問へ進む
       S.answers = S.answers.filter(function (a) { return !(a.qid === doc.qid && a.by === doc.by); });
       S.answers.unshift(doc);
