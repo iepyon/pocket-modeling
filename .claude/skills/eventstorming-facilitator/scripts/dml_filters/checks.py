@@ -1466,7 +1466,7 @@ def state_dead_end(model: dict) -> list[Finding]:
 
 
 def invariant_refs(model: dict) -> list[Finding]:
-    """invariants[] の参照整合性（agg の実在・in の状態が agg.states に存在）を検査する。"""
+    """invariants[] の参照整合性（agg の実在・in の状態が agg.states か生成前の NONE）を検査する。"""
     aggs = {a.get("name"): a for _, a in _dict_aggs(model) if a.get("name")}
     findings: list[Finding] = []
     for i, inv in enumerate(model.get("invariants") or []):
@@ -1491,7 +1491,7 @@ def invariant_refs(model: dict) -> list[Finding]:
                     slice={"invariant": name, "agg": c.get("agg")},
                 ))
                 continue
-            known = set(agg.get("states") or [])
+            known = set(agg.get("states") or []) | {INITIAL_PSEUDO_STATE}  # NONE=生成前
             for st in c.get("in") or []:
                 if st not in known:
                     findings.append(Finding(

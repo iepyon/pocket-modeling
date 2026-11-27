@@ -8,10 +8,11 @@
     python3 scripts/dml_to_quint.py <file.dml.yaml> [--out <file.qnt>] [--duplicates]
     python3 scripts/dml_to_quint.py <file.dml.yaml> --run [--max-steps N] [--max-samples N]
 
---run は Quint CLI（`quint`、または環境変数 QUINT_BIN）で `quint run` を実行し、
-safety の不変条件（allInvariants）をランダムシミュレーションで検査する。
-liveness は `temporal` 性質として出力するが `quint run` では検査できない
-（`quint verify --temporal` と Apalache が必要）。
+--run   は Quint CLI（`quint`、または環境変数 QUINT_BIN）で `quint run`（ランダムシミュレーション）を実行する。
+        safety は `step` 上の allInvariants、liveness は `stepLive` 上の allQuiescent（下記）を検査する。
+--verify は `quint verify`（Apalache による有界モデル検査）で同じ 2 つを網羅的に検査する。
+        初回は Apalache を自動取得する。ステップ数が大きいと時間がかかる（60 アクション規模で
+        9 ステップ約 2 分）ため、深い状態へ到達する検査は --run を使う。
 
 ## 変換モデル（過大近似・各集約 1 インスタンス）
 
@@ -25,6 +26,17 @@ liveness は `temporal` 性質として出力するが `quint run` では検査�
 - EVT と遷移先の対応: scenario に brs があるとき、cmd の遷移を `to` の出現順でグループ化し、
   k 番目の brs の EVT を k 番目のグループに対応づける。余る brs は「状態不変で EVT だけ発生」
   （例: 最少催行人数に届かず確定しない）。対応づけられない場合は全 brs の EVT を許す過大近似
+- liveness の公平性: Apalache は fairness 演算子に未対応のため、liveness 用に別の遷移 `stepLive` を出す。
+  `stepLive` は「配送・POLICY 発火などシステム側の遷移が可能なら必ずそれを先に行い、
+  なければ利用者操作、どちらもなければ停止（stutter）」という優先スケジューラ。
+  仮定: 「メッセージは次の利用者操作より前に配送される」。つまり競合（配送中に別の操作が割り込む）は
+  liveness 検査では消えるので、競合は safety 側（`step`）で検査する。停止状態を stutter にしているのは、
+  行き詰まり（デッドロック）で性質が満たされないケースを違反として検出するため
+- liveness の検査（quiescence 検査）: Apalache の temporal 検査は 100 アクション規模だと現実的な時間で
+  終わらないため、`stepLive` の上では「システム側の遷移が尽きた（静止）状態で when が成り立つなら
+  eventually も成り立つ」を safety として検査する（`quiet_<Name>` / `allQuiescent`）。
+  静止状態に達したのに結果が出ていないなら本当の行き詰まりなので、反例になる。
+  LTL の liveness（`live_<Name>`）も `temporal` として出力するが、現状は検査に使わない
 - 制約: 1 インスタンス抽象のため、「申込 N 件のうち 1 件」のような多重度は表せない
 """
 
@@ -177,9 +189,15 @@ class Gen:
         self.m = model
         self.vars = [f"st_{ident(n)}" for n in model.stateful] + ["emitted", "inbox", "fired"]
         self.actions: list[str] = []
+        self.sys_actions: list[str] = []
+        self.env_actions: list[str] = []
+        self.enabled: dict[str, str] = {}
         self.lines: list[str] = []
+        self.env = False  # True の間に定義する action は利用者操作
 
     def action(self, name: str, guards: list[str], assigns: dict[str, str]) -> None:
+        (self.env_actions if self.env else self.sys_actions).append(name)
+        self.enabled[name] = "and { " + ", ".join(guards) + " }" if guards else "true"
         body = list(guards)
         for v in self.vars:
             body.append(f"{v}' = {assigns.get(v, v)}")
@@ -267,6 +285,7 @@ class Gen:
             self.action(f"fire_{ident(name)}", [trig, f"not(fired.contains({qstr(name)}))"], assigns)
 
         # --- 利用者操作 ---
+        self.env = True
         conds = m.issue_conditions()
         for i, sc in enumerate(m.scenarios):
             c = conds.get(i)
@@ -295,7 +314,28 @@ class Gen:
         out += [f"    {a}," for a in self.actions[:-1]] + ([f"    {self.actions[-1]}"] if self.actions else ["    all { true }"])
         out += ["  }", ""]
 
-        safeties = []
+        # liveness 用の優先スケジューラ（システム遷移 → 利用者操作 → 停止）
+        def any_of(names: list[str], prefix: str) -> list[str]:
+            return [f"  val {prefix}_{n} = {self.enabled[n]}" for n in names]
+
+        out += any_of(self.sys_actions, "en") + any_of(self.env_actions, "en")
+        sys_en = "or { " + ", ".join(f"en_{n}" for n in self.sys_actions) + " }" if self.sys_actions else "false"
+        env_en = "or { " + ", ".join(f"en_{n}" for n in self.env_actions) + " }" if self.env_actions else "false"
+        out.append(f"  val sysEnabled = {sys_en}")
+        out.append(f"  val envEnabled = {env_en}")
+        unchanged = ", ".join(f"{v}' = {v}" for v in self.vars)
+        sys_step = "any { " + ", ".join(self.sys_actions) + " }" if self.sys_actions else "all { false }"
+        env_step = "any { " + ", ".join(self.env_actions) + " }" if self.env_actions else "all { false }"
+        out += [
+            "  action stepLive = any {",
+            f"    all {{ sysEnabled, {sys_step} }},",
+            f"    all {{ not(sysEnabled), envEnabled, {env_step} }},",
+            f"    all {{ not(sysEnabled), not(envEnabled), {unchanged} }}",
+            "  }",
+            "",
+        ]
+
+        safeties, quiets = [], []
         for inv in m.invariants:
             nm = ident(inv.get("name") or "Unnamed")
             if inv.get("kind") == "safety":
@@ -305,7 +345,10 @@ class Gen:
             elif inv.get("kind") == "liveness":
                 w, e = self.cond(inv["when"]), self.cond(inv["eventually"])
                 out.append(f"  temporal live_{nm} = always({w} implies eventually({e}))")
+                out.append(f"  val quiet_{nm} = not(sysEnabled) implies (not({w}) or {e})")
+                quiets.append(f"quiet_{nm}")
         out.append("  val allInvariants = " + ("and { " + ", ".join(safeties) + " }" if safeties else "true"))
+        out.append("  val allQuiescent = " + ("and { " + ", ".join(quiets) + " }" if quiets else "true"))
         out += ["}", ""]
         return "\n".join(out)
 
@@ -328,6 +371,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", help="出力 .qnt（省略時 dist/verify/<name>.qnt）")
     ap.add_argument("--duplicates", action="store_true", help="メッセージの重複配信（at-least-once）を許す")
     ap.add_argument("--run", action="store_true", help="quint run で safety を検査する")
+    ap.add_argument("--verify", action="store_true", help="quint verify（Apalache）で safety と liveness を検査する")
+    ap.add_argument("--verify-steps", type=int, default=12, help="--verify の探索ステップ数上限")
     ap.add_argument("--max-steps", type=int, default=30)
     ap.add_argument("--max-samples", type=int, default=2000)
     args = ap.parse_args(argv)
@@ -339,17 +384,32 @@ def main(argv: list[str] | None = None) -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(qnt, encoding="utf-8")
     print(f"✅ 生成: {out}（invariants {len(dml.get('invariants') or [])} 件）")
-    if not args.run:
+    if not (args.run or args.verify):
         return 0
     quint = find_quint()
     if not quint:
         print("❌ quint が見つかりません（`npm i -g @informalsystems/quint` または QUINT_BIN を指定）", file=sys.stderr)
         return 2
-    cmd = quint + [
-        "run", str(out), f"--main={MODULE}", "--invariant=allInvariants",
-        f"--max-steps={args.max_steps}", f"--max-samples={args.max_samples}",
-    ]
-    return subprocess.run(cmd, check=False).returncode
+    rc = 0
+    has_live = any(isinstance(i, dict) and i.get("kind") == "liveness" for i in dml.get("invariants") or [])
+    # (ラベル, 不変条件名, 遷移名)
+    jobs = [("safety（step 上の allInvariants）", "allInvariants", "step")]
+    if has_live:
+        jobs.append(("liveness（stepLive 上の allQuiescent）", "allQuiescent", "stepLive"))
+    for label, inv_name, step in jobs:
+        if args.run:
+            print(f"▶ quint run {label}")
+            rc = subprocess.run(
+                quint + ["run", str(out), f"--main={MODULE}", f"--invariant={inv_name}", f"--step={step}",
+                         f"--max-steps={args.max_steps}", f"--max-samples={args.max_samples}"],
+                check=False).returncode or rc
+        if args.verify:
+            print(f"▶ quint verify {label}（{args.verify_steps} ステップまで網羅）")
+            rc = subprocess.run(
+                quint + ["verify", str(out), f"--main={MODULE}", f"--invariant={inv_name}", f"--step={step}",
+                         f"--max-steps={args.verify_steps}"],
+                check=False).returncode or rc
+    return rc
 
 
 if __name__ == "__main__":

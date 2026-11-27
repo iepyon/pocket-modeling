@@ -82,6 +82,9 @@ class GenerateTest(unittest.TestCase):
         self.assertIn("val inv_NoCancelledReserved = not(and {", q)
         self.assertIn("temporal live_CancelFrees = always(", q)
         self.assertIn("val allInvariants = and { inv_NoCancelledReserved }", q)
+        self.assertIn("val quiet_CancelFrees = not(sysEnabled) implies", q)
+        self.assertIn("val allQuiescent = and { quiet_CancelFrees }", q)
+        self.assertIn("action stepLive = any {", q)
 
     def test_unknown_agg_in_invariant_exits(self):
         invs = [{"name": "X", "kind": "safety", "never": [{"agg": "Ghost", "in": ["A"]}]}]

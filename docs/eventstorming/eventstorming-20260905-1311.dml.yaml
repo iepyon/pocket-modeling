@@ -1667,6 +1667,16 @@ questions:
     topic: ミートアップ単位でしか守れない制約（定員超過・二重申込・押さえの一意性）を、実装でどう担保するか
     why: 参加申込も会場予約も一件ぶんの粒度で設計したため、件数や一意性という「まとめて見ないと分からない制約」は集約の中では守れない。楽観ロックか、ミートアップ単位の席台帳か、方式の選択が要る。
     status: open
+  - id: Q5
+    topic: 受付を開始したあとに開催確定のミートアップを中止すると、受付名簿が開いたままになる。中止時に受付を閉じる仕組みが要るか
+    why: モデル検査（invariants の NoOpenCheckInOnCancelledMeetup）が、開催確定→会場本予約→受付開始→中止（Meetup は CONFIRMED→CANCELLED）の順で、Meetup が CANCELLED なのに AttendanceSheet が OPEN の状態を見つけた。中止を受けて受付名簿を閉じる POLICY も遷移も今は無い。やむを得ない中止（会場が使えなくなる等）は受付開始後にも起こりうる。
+    status: open
+    note: 'dmlctl quint <file> --run で再現（seed=0x2e6f006a69aa7）。対応案: (a) 受付開始後は中止できないようにする、(b) 中止で受付名簿を閉じる POLICY を足す、(c) 受付名簿に「中止」状態を持たせる。'
+  - id: Q6
+    topic: 中止後の申込を、状態機械の外（scenario のガード）だけで防いでよいか
+    why: モデル検査（invariants の CancelledMeetupRevokesRegistrations）が、Meetup が CANCELLED になったあとに ApplyForMeetup が通って Registration が CONFIRMED のまま残る状態を見つけた。RevokeRegistrationsOnMeetupCancelled は中止の時点で既にある申込にだけ効く。中止後の申込を弾く条件は scenario の rules にあるかもしれないが、検査モデルはそれを読めないため、本当のモデル漏れか検査の限界かは未判定。
+    status: open
+    note: dmlctl quint <file> --run で再現。判定には「申込を受け付けるときに Meetup の状態を見る」ガードが rules に書かれているかの確認が要る。
 actions:
   - id: A1
     text: 募集締切と開催可否を決める締切が同じか別かを主催者に確認する（Q1）。別なら Meetup に締切を2つ持たせる。
@@ -1684,3 +1694,68 @@ actions:
   - id: A5
     text: Q4（ミートアップ単位の制約の担保方式）を設計フェーズの最初の論点として持ち込む。
     done: false
+invariants:
+  - name: HeldMeetupHasBookedVenue
+    kind: safety
+    never:
+      - agg: Meetup
+        in:
+          - HELD
+      - agg: VenueBooking
+        in:
+          - NONE
+          - TENTATIVE
+          - RELEASED
+          - CANCELLED
+          - EXPIRED
+    note: 開催完了したミートアップの会場は、本予約のままであること（仮押さえ・失効・解放のまま開催完了にならない）
+  - name: NoOpenCheckInOnCancelledMeetup
+    kind: safety
+    never:
+      - agg: AttendanceSheet
+        in:
+          - OPEN
+      - agg: Meetup
+        in:
+          - CANCELLED
+    note: 中止されたミートアップで受付が開いたままにならないこと
+  - name: CancelledMeetupReleasesVenue
+    kind: liveness
+    when:
+      agg: Meetup
+      in:
+        - CANCELLED
+    eventually:
+      agg: VenueBooking
+      in:
+        - NONE
+        - RELEASED
+        - CANCELLED
+        - EXPIRED
+    note: 中止されたミートアップの会場は、いずれ手放される（そもそも押さえていない場合を含む）
+  - name: ConfirmedMeetupGetsAttendanceSheet
+    kind: liveness
+    when:
+      agg: Meetup
+      in:
+        - CONFIRMED
+    eventually:
+      agg: AttendanceSheet
+      in:
+        - PREPARED
+        - OPEN
+        - CLOSED
+    note: 開催確定したミートアップには、いずれ受付名簿が用意される
+  - name: CancelledMeetupRevokesRegistrations
+    kind: liveness
+    when:
+      agg: Meetup
+      in:
+        - CANCELLED
+    eventually:
+      agg: Registration
+      in:
+        - NONE
+        - CANCELLED
+        - REVOKED
+    note: 中止されたミートアップの申込は、いずれ無効化される（申込が無い場合・本人が取り消した場合を含む）
