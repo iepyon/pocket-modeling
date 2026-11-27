@@ -160,7 +160,7 @@
     sel: null, redo: '', busy: false, formErr: '',
     last: null,          // 直前に送った回答 {qid, line}
     notify: '',          // '' | 'sending' | 'ok' | {code, detail}
-    unavailable: '', stale: false, viewKey: ''
+    notifiedAt: 0, unavailable: '', stale: false, viewKey: ''
   };
 
   function el(tag, cls, text) {
@@ -448,7 +448,10 @@
       S.answers = S.answers.filter(function (a) { return !(a.qid === doc.qid && a.by === doc.by); });
       S.answers.unshift(doc);
       S.last = { qid: doc.qid, line: answerLine(doc) };
-      notifyClaude();
+      // 続けて答えているあいだは通知を 1 回にまとめる（Claude は起きるたびに未反映の回答をすべて読む）
+      var waiting = pending().some(function (a) { return a.qid !== doc.qid; });
+      if (S.notify === 'ok' && waiting && Date.now() - S.notifiedAt < 60000) render();
+      else notifyClaude();
     }, function (e) {
       S.busy = false;
       buttons.forEach(function (b) { b.disabled = false; });
@@ -487,7 +490,7 @@
       });
     }).then(function (r) {
       if (r && r.threadId) saveThread(r.threadId);
-      S.notify = 'ok'; render();
+      S.notify = 'ok'; S.notifiedAt = Date.now(); render();
     }, function (e) {
       S.notify = { code: (e && e.code) || 'upstream_error', detail: String((e && e.message) || '').slice(0, 200) }; render();
     });
