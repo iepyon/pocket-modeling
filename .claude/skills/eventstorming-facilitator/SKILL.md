@@ -264,14 +264,15 @@ Markdown 風の散文として書く。bullet (`- foo`) と `**強調**` は HTM
 
 ## Artifact 上のグリル（質問に答えると下のモデルが更新される）
 
-非エンジニアにも「ツールを使っている」感覚で参加してもらうための既定の出力形態。`Artifact` ツールが使えるセッションでは、HTML は **Artifact として公開**し、質問は **ページ上部の質問パネル**に出す。回答が送信されると Claude のセッションが自動で起き、DML 更新 → 再公開 → 次の質問、と進む（チャットでの回答も従来どおり受け付ける）。`Artifact` ツールが無い環境では従来どおり `dist/eventstorming/<session>.html` とチャットで進める。
+非エンジニアにも「ツールを使っている」感覚で参加してもらうための既定の出力形態。`Artifact` ツールが使えるセッションでは、HTML は **Artifact として公開**し、質問は **ページ上部の質問エリア**に出す。ページは 2 つの領域を別々に描く: **質問エリア**（答えたらすぐ次の質問へ進む。モデルの反映を待たせない）と、**反映エリア**（「反映中 N 件／すべて反映済み」と反映内容の一言。その下がモデル本体）。回答が送信されると Claude のセッションが自動で起き、裏で DML 更新 → 再公開 → 質問の補充、と進む（チャットでの回答も従来どおり受け付ける）。`Artifact` ツールが無い環境では従来どおり `dist/eventstorming/<session>.html` とチャットで進める。
 
 ### 仕組み
 
 | 要素 | 置き場所 | 書き手 |
 |---|---|---|
 | ページ本体 | `dist/eventstorming/<session>-artifact.html`（`eventstorming_build.py <dml> --artifact`） | ビルダー（手で編集しない） |
-| いまの質問 | Artifact の db `grill/current` | Claude（`ArtifactData`）。閲覧者は読むだけ |
+| 質問の列 | Artifact の db `grill/current`（`questions[]`） | Claude（`ArtifactData`）。閲覧者は読むだけ |
+| 反映の記録 | Artifact の db `grill/progress`（`reflected{}`） | Claude（`ArtifactData`） |
 | 回答 | Artifact の db `answers/<qid>--<回答者id>` | 閲覧者（質問パネル） |
 | 起床通知 | パネルが `comments.sendToClaude` で「【グリル回答】…」というコメントを Claude に送る。この Artifact を見張っているセッション（公開したセッション）が起きる | 閲覧者のブラウザ |
 
@@ -286,36 +287,46 @@ Markdown 風の散文として書く。bullet (`- foo`) と `**強調**` は HTM
     "user": {"scopes": ["profile"]},
     "comments": {}}
    ```
-3. 最初の質問を `grill/current` に書く（下の「質問ドキュメント」）
+3. 最初の質問の列を `grill/current` に書く（下の「質問ドキュメント」）
 4. URL をユーザーに 1 行で伝える。共有相手に答えてもらう場合は、Share メニューで**コントリビューター以上**にする必要があると添える（閲覧のみの人は質問を読めるが答えられない）
 
 別の会話で続きをやるときは、公開済み URL を `Artifact` の `url` に渡して同じ URL を更新する（URL が会話に無ければ `action: "list"` でタイトルから探す）。公開結果の「Durable wake subscription」行で、このセッションが見張りに登録されたことを確かめる（されていなければ `ArtifactComments` の `action: "watch"`）。
 
-### 質問ドキュメント（`grill/current`）
+### 質問ドキュメント（`grill/current`）と反映の記録（`grill/progress`）
 
 ```json
-{"qid": "q-20261127-01", "status": "open", "phase": "3. イベント発見",
- "text": "質問文（業務の言葉で・DDD 用語なし・1 問だけ）",
- "why": "なぜ聞くか（任意・1 文）",
- "hint": "？ への応答（任意）",
- "options": [{"label": "選択肢", "desc": "補足（任意）"}]}
+// grill/current — 質問の列。各閲覧者には「自分がまだ答えていない先頭の 1 問」だけが表示される
+{"questions": [
+  {"qid": "q-20261127-04", "phase": "3. イベント発見",
+   "text": "質問文（業務の言葉で・DDD 用語なし・1 問で 1 つのことだけ聞く）",
+   "why": "なぜ聞くか（任意・1 文）",
+   "hint": "？ への応答（任意）",
+   "options": [{"label": "選択肢", "desc": "補足（任意）"}]}
+]}
+// 質問が尽きたら {"questions": [], "done": true, "note": "締めの一言"}
+
+// grill/progress — どの回答をモデルに反映したか。反映エリアに summary が出る
+{"reflected": {"q-20261127-03": {"at": "2026-11-27T23:15:00Z",
+  "summary": "「直前だけ確認を取る」→ 未確認事項 Q3 に記録"}}}
 ```
 
-- **質問は 1 回に 1 つ**（①会話プロトコルと同じ）。`options` は 2〜4 個、誘導にならない範囲で。自由記述欄は常に出る
-- **`qid` は書くたびに新しくする**（ヒントを足して出し直すときも）。同じ qid のままだと回答済みの人の画面が切り替わらない
-- 既存ドキュメントの上書きには `if_version` が要る（直前の get/set 結果の `version`）
-- 質問が尽きたら `{"qid": ..., "status": "done", "text": "...", "note": "締めの一言"}`
+- **画面に出るのは 1 問ずつ**（①会話プロトコルと同じ）。ただし回答者を待たせないため、**列には常に 2〜3 問先まで積んでおく**。積むのは互いに独立した質問（前の答えで問い方が変わらないもの）。前の答えに依存する深掘りは、回答を読んでから**列の先頭**に差し込む
+- `options` は 2〜4 個、誘導にならない範囲で。自由記述欄は常に出る
+- **`qid` は質問ごとに一意**。ヒントを足して出し直すときも新しい qid にする（同じ qid は回答済み扱いで表示されない）
+- `summary` は非エンジニアが読む一言（「回答」→ モデルで何が変わったか）。DDD 用語・英語識別子を避ける。モデルを変えなかった場合もそう書く
+- 既存ドキュメントの上書きには `if_version` が要る（直前の get/set 結果の `version`）。`progress` は `update` で 1 件ずつ足すと他の記録を消さずに済む
 
 ### 回答が届いたとき（毎回この順）
 
 パネルからの通知（「【グリル回答】…」で始まる Artifact コメント）、またはユーザーがチャットで「回答した」と言ったら:
 
-1. `ArtifactData` `query` で `answers` から現在の `qid` の回答を読む（`where: [["qid","==",<qid>]]`）
-2. 回答を解釈して DML を dmlctl で更新（build + validate は自動）。`hint: true` の回答は ①会話プロトコルの `？` シグナルとして扱い、DML は変えずに `hint` を付けた質問を新しい qid で出し直す
-3. `eventstorming_build.py <dml> --artifact` → 同じファイルパスで `Artifact` 再公開（開いている画面は自動で更新される）
-4. 次の質問を `grill/current` に書く
-5. コメントで起きた場合は、そのスレッドに `ArtifactComments` `reply` で何を反映したかを 1〜2 文で返す（スレッドは使い回すので resolve しない）
-6. チャットには②のチャット出力フォーマットで差分を短く残す
+1. `ArtifactData` で `answers` と `grill/progress` を読み、**未反映の回答**（`qid` が `reflected` に無いもの）をすべて拾う。通知 1 回につき 1 件とは限らない
+2. **先に質問の列を補充する**（回答者は待たずに次へ進んでいるので、列を空にしないことが最優先）。反映済みで全員が答えた質問は列から外し、深掘りがあれば先頭に、足りなければ独立した質問を後ろに足す
+3. 回答を解釈して DML を dmlctl で更新（build + validate は自動）。`hint: true` の回答は ①会話プロトコルの `？` シグナルとして扱い、DML は変えずに `hint` を付けた質問を新しい qid で列の先頭に出し直す
+4. `eventstorming_build.py <dml> --artifact` → 同じファイルパスで `Artifact` 再公開（開いている画面のモデル部分が更新される。質問エリアの入力途中の内容は保たれる）
+5. 反映した qid を `grill/progress.reflected` に `summary` つきで書く（ヒント要求の qid も、応答したら書く）
+6. コメントで起きた場合は、そのスレッドに `ArtifactComments` `reply` で何を反映したかを 1〜2 文で返す（スレッドは使い回すので resolve しない）
+7. チャットには②のチャット出力フォーマットで差分を短く残す
 
 守ること:
 
