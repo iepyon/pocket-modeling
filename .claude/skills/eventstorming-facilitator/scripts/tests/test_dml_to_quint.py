@@ -80,7 +80,7 @@ class GenerateTest(unittest.TestCase):
         ]
         q = generate(model(invariants=invs))
         self.assertIn("val inv_NoCancelledReserved = not(and {", q)
-        self.assertIn("temporal live_CancelFrees = always(", q)
+        self.assertNotIn("temporal live_", q)  # LTL は出さない（quiescence 検査のみ）
         self.assertIn("val allInvariants = and { inv_NoCancelledReserved }", q)
         self.assertIn("val quiet_CancelFrees = not(sysEnabled) implies", q)
         self.assertIn("val allQuiescent = and { quiet_CancelFrees }", q)

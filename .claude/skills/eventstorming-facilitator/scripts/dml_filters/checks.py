@@ -12,6 +12,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from .shared import INITIAL_STATE as INITIAL_PSEUDO_STATE
+from .shared import policy_triggers, scenario_evts
+from .shared import to_list as _to_list
+
 
 # ============================================================
 # 共通: Finding 構造
@@ -58,13 +62,8 @@ def _scenario_events(model: dict) -> set[str]:
     """scenarios[].evt と scenarios[].brs[].evt に現れる EVT 名の集合。"""
     out: set[str] = set()
     for s in model.get("scenarios") or []:
-        if not isinstance(s, dict):
-            continue
-        if s.get("evt"):
-            out.add(s["evt"])
-        for br in s.get("brs") or []:
-            if isinstance(br, dict) and br.get("evt"):
-                out.add(br["evt"])
+        if isinstance(s, dict):
+            out.update(scenario_evts(s))
     return out
 
 
@@ -89,11 +88,8 @@ def _aggregate_events(model: dict) -> set[str]:
     """aggregates[].events[].name に宣言された EVT 名の集合。"""
     out: set[str] = set()
     for a in model.get("aggregates") or []:
-        if not isinstance(a, dict):
-            continue
-        for ev in a.get("events") or []:
-            if isinstance(ev, dict) and ev.get("name"):
-                out.add(ev["name"])
+        if isinstance(a, dict):
+            out |= _agg_event_names(a)
     return out
 
 
@@ -265,11 +261,7 @@ def state_reachability(model: dict) -> list[Finding]:
         for tr in agg.get("transitions") or []:
             if not isinstance(tr, dict):
                 continue
-            to = tr.get("to")
-            if isinstance(to, list):
-                targets.update(to)
-            elif to:
-                targets.add(to)
+            targets.update(_to_list(tr.get("to")))
 
         for state in states:
             if state == initial:
@@ -1129,9 +1121,6 @@ def subdomain_classification(model: dict) -> list[Finding]:
 # scenarios / policies の突き合わせ。集約間の状態前提や非同期挙動は構造では判定できないため
 # モデル検査（別途）の領分とし、ここでは「宣言同士が矛盾していないか」だけを見る。
 
-INITIAL_PSEUDO_STATE = "NONE"  # transitions[].from に書く「生成前」の擬似状態
-
-
 def _dict_aggs(model: dict):
     """(i, agg) を dict の AGG だけ yield する。"""
     for i, agg in enumerate(model.get("aggregates") or []):
@@ -1139,10 +1128,8 @@ def _dict_aggs(model: dict):
             yield i, agg
 
 
-def _to_list(to: Any) -> list[str]:
-    if isinstance(to, list):
-        return [t for t in to if t]
-    return [to] if to else []
+def _aggs_by_name(model: dict) -> dict[str, dict]:
+    return {a["name"]: a for _, a in _dict_aggs(model) if a.get("name")}
 
 
 def _agg_event_names(agg: dict) -> set[str]:
@@ -1151,6 +1138,12 @@ def _agg_event_names(agg: dict) -> set[str]:
         for ev in (agg.get("events") or [])
         if isinstance(ev, dict) and ev.get("name")
     }
+
+
+def _ambiguous(a: dict, b: dict) -> bool:
+    """同じ (from, via) の 2 遷移が曖昧か（to が重なる、または when が欠ける）。"""
+    overlap = set(_to_list(a.get("to"))) & set(_to_list(b.get("to")))
+    return bool(overlap) or not a.get("when") or not b.get("when")
 
 
 def transition_state_integrity(model: dict) -> list[Finding]:
@@ -1168,7 +1161,7 @@ def transition_state_integrity(model: dict) -> list[Finding]:
             continue
         name = agg.get("name") or ""
         known = set(states)
-        seen: dict[tuple[str, str], list[int]] = {}
+        seen: dict[tuple[str, str], list[tuple[int, dict]]] = {}
         for j, tr in enumerate(agg.get("transitions") or []):
             if not isinstance(tr, dict):
                 continue
@@ -1189,23 +1182,20 @@ def transition_state_integrity(model: dict) -> list[Finding]:
                         slice={"agg": name, "to": t},
                     ))
             key = (frm or "", tr.get("via") or "")
-            if key[1]:
-                transitions = agg.get("transitions") or []
-                for prev in seen.get(key, []):
-                    other = transitions[prev]
-                    overlap = set(_to_list(tr.get("to"))) & set(_to_list(other.get("to")))
-                    if overlap or not tr.get("when") or not other.get("when"):
-                        findings.append(Finding(
-                            kind="transition_state_integrity",
-                            path=f"aggregates[{i}].transitions[{j}]",
-                            message=(
-                                f"AGG '{name}' の遷移 (from '{key[0]}', via '{key[1]}') が "
-                                f"transitions[{prev}] と曖昧です（to が重複、または when が無い）"
-                            ),
-                            slice={"agg": name, "from": key[0], "via": key[1]},
-                        ))
-                        break
-                seen.setdefault(key, []).append(j)
+            if not key[1]:
+                continue
+            prev = next((pj for pj, other in seen.get(key, []) if _ambiguous(tr, other)), None)
+            if prev is not None:
+                findings.append(Finding(
+                    kind="transition_state_integrity",
+                    path=f"aggregates[{i}].transitions[{j}]",
+                    message=(
+                        f"AGG '{name}' の遷移 (from '{key[0]}', via '{key[1]}') が "
+                        f"transitions[{prev}] と曖昧です（to が重複、または when が無い）"
+                    ),
+                    slice={"agg": name, "from": key[0], "via": key[1]},
+                ))
+            seen.setdefault(key, []).append((j, tr))
         for k, ts in enumerate(agg.get("terminalStates") or []):
             if ts not in known:
                 findings.append(Finding(
@@ -1226,7 +1216,7 @@ def scenario_agg_consistency(model: dict) -> list[Finding]:
     cmd が transitions[].via に無いことは検査しない。playbook §AGG が「生成（creation）」
     「同一状態内の属性変更」を transitions[] に書かないと定めており、正当な省略と区別できないため。
     """
-    aggs = {a.get("name"): a for _, a in _dict_aggs(model) if a.get("name")}
+    aggs = _aggs_by_name(model)
     findings: list[Finding] = []
     for i, sc in enumerate(model.get("scenarios") or []):
         if not isinstance(sc, dict):
@@ -1298,7 +1288,7 @@ def policy_agg_consistency(model: dict) -> list[Finding]:
     cmd だけで agg を持たない POLICY は副作用専用（通知など）として正当なので検査しない。
     cmd が transitions[].via に無いことも、scenario と同じ理由で検査しない。
     """
-    aggs = {a.get("name"): a for _, a in _dict_aggs(model) if a.get("name")}
+    aggs = _aggs_by_name(model)
     findings: list[Finding] = []
     for i, pol in enumerate(model.get("policies") or []):
         if not isinstance(pol, dict):
@@ -1338,29 +1328,16 @@ def policy_cycle(model: dict) -> list[Finding]:
     """
     cmd_evts: dict[str, set[str]] = {}
     for sc in model.get("scenarios") or []:
-        if not isinstance(sc, dict) or not sc.get("cmd"):
-            continue
-        evs = cmd_evts.setdefault(sc["cmd"], set())
-        if sc.get("evt"):
-            evs.add(sc["evt"])
-        for br in sc.get("brs") or []:
-            if isinstance(br, dict) and br.get("evt"):
-                evs.add(br["evt"])
+        if isinstance(sc, dict) and sc.get("cmd"):
+            cmd_evts.setdefault(sc["cmd"], set()).update(scenario_evts(sc))
 
     graph: dict[str, set[str]] = {}
     via_pol: dict[tuple[str, str], set[str]] = {}
     for pol in model.get("policies") or []:
         if not isinstance(pol, dict):
             continue
-        triggers = set()
-        if pol.get("trg"):
-            triggers.add(pol["trg"])
-        trgs = pol.get("trgs") or {}
-        if isinstance(trgs, dict):
-            triggers.update(e for e in (trgs.get("evts") or []) if e)
-        outs = set()
-        if pol.get("evt"):
-            outs.add(pol["evt"])
+        triggers, _mode = policy_triggers(pol)
+        outs = {pol["evt"]} if pol.get("evt") else set()
         if pol.get("cmd"):
             outs |= cmd_evts.get(pol["cmd"], set())
         for t in triggers:
@@ -1470,7 +1447,7 @@ def invariant_refs(model: dict) -> list[Finding]:
 
     agg が aggregates[] に存在し、in の状態が agg.states か生成前の NONE であること。
     """
-    aggs = {a.get("name"): a for _, a in _dict_aggs(model) if a.get("name")}
+    aggs = _aggs_by_name(model)
     findings: list[Finding] = []
     conds_by_owner: list[tuple[str, list[tuple[str, Any]]]] = []
     for i, inv in enumerate(model.get("invariants") or []):
