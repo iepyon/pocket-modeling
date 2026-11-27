@@ -39,6 +39,16 @@ DML 品質チェックは **2 段階**で行う：
 | `bc_vocabulary_collision` | lang 辞書の同名異義（同 EN 別ラベル）/ 異名同義（同ラベル別 EN） | 識別子統一 or note で Conformist/ACL 明示 |
 | `crud_cmd_naming` | CMD が CRUD 風接頭辞（Create/Add/Update/Delete/Get/Set 等） | 業務行為の動詞に言い換え |
 | `subdomain_classification` | コアドメイン蒸留の未実施（domains[].subs 未定義・contexts[].sub 未設定/参照切れ・CORE 0 件・全件 CORE） | domains[].subs に CORE/SUPPORTING/GENERIC を定義し contexts[].sub で割り当て |
+| `transition_state_integrity` | transitions[].from/to・terminalStates が states に無い（`from: NONE` は許容）／同じ (from, via) が曖昧（to 重複 or when 欠落） | states か遷移を修正。分岐は `when` 付きで to を分ける |
+| `scenario_agg_consistency` | scenarios[].agg が aggregates[] に無い（error）／scenario の evt・brs[].evt が agg.events に未宣言（warn） | agg 名を修正、または agg.events に EVT を追加 |
+| `evt_ownership` | 同じ EVT を複数 AGG が events に宣言（emit 元が曖昧） | 所有 AGG を 1 つに決める |
+| `policy_agg_consistency` | policies[].agg が aggregates[] に無い（error）／policies[].evt が agg.events に未宣言（warn）。agg 無しの副作用専用 POL は対象外 | agg 名を修正、または agg.events に EVT を追加 |
+| `policy_cycle` | EVT→POLICY→CMD→EVT の連鎖が閉路（warn） | 意図した再試行でなければ停止条件を設ける |
+| `invariant_refs` | invariants[] の agg が aggregates[] に無い／in の状態が agg.states に無い | 参照を修正 |
+| `state_dead_end` | 出る遷移が無く terminalStates にも無い状態（warn） | 終端なら `aggregates[].terminalStates` に宣言、でなければ遷移を追加 |
+
+**severity**: 各 finding は `severity`（`error` / `warn`）を持つ。`warn` は報告のみで終了コードに影響しない（意図的な書き方と区別できない可能性があるため）。
+`cmd` が `transitions[].via` に無いことは検査しない（playbook の「AGG 生成・同一状態内の属性変更は transitions に書かない」規約で正当に起こるため）。集約間の状態前提・非同期挙動は構造チェックの対象外（モデル検査の領分）。
 
 実行例：
 
@@ -49,9 +59,9 @@ python3 scripts/dmlctl.py checks  # 観点名の一覧
 ```
 
 個別チェックは JSON で `{ "check": ..., "count": N, "findings": [...] }` を stdout に出す。
-`--all` は `{ "mode": "all", "checks_run", "checks_with_findings", "total_findings", "clean": [...], "results": [...] }`
+`--all` は `{ "mode": "all", "checks_run", "checks_with_findings", "total_findings", "total_errors", "total_warnings", "clean": [...], "results": [...] }`
 （違反ゼロの観点は `clean` に名前だけ、違反ありは `results` に詳細）。
-exit code はいずれも違反 0 件＝0、それ以外＝1。
+exit code は `severity: error` が 0 件＝0、1 件以上＝1（`warn` のみなら 0）。
 
 ---
 

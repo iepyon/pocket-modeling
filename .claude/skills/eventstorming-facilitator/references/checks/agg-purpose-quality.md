@@ -20,11 +20,10 @@ python3 scripts/dmlctl.py view <session>.dml.yaml --view=agg-detail [--name <Agg
 読み、単一責任の明確化として十分な記述か評価してください。
 
 評価観点:
-1. **purpose は 30 字以上か**（短すぎないか）
-2. **単一責任の言語化** になっているか（複数の責務が混在していないか）
-3. **業務語彙** で書かれているか（実装詳細・データモデル詳細ではないか）
-4. **background が WHY** を答えているか（「なぜ今この AGG を切り出すか」が伝わるか）
-5. **constraints が業務 / 法令 / プラットフォームの制約** であり、技術スタック制約に偏っていないか
+1. **単一責任の言語化** になっているか（複数の責務が混在していないか）
+2. **業務語彙** で書かれているか（実装詳細・データモデル詳細ではないか）
+3. **background が WHY** を答えているか（「なぜ今この AGG を切り出すか」が伝わるか）
+4. **constraints が業務 / 法令 / プラットフォームの制約** であり、技術スタック制約に偏っていないか
 
 入力 (YAML):
 {{agg_detail_yaml}}
@@ -33,7 +32,6 @@ python3 scripts/dmlctl.py view <session>.dml.yaml --view=agg-detail [--name <Agg
 [
   {
     "agg": "<AggName>",
-    "purpose_len": N,
     "verdict": "ok" | "needs-revision" | "critical",
     "issues": [
       { "field": "purpose"|"background"|"constraints", "issue": "<指摘>", "suggestion": "<改善案>" }
@@ -53,5 +51,5 @@ python3 scripts/dmlctl.py view <session>.dml.yaml --view=agg-detail [--name <Agg
 
 ## 連携する構造チェック
 
-- `agg_purpose_minlength` — 観点 1（purpose 30 字以上）は構造チェックに降格済み。先に走らせて
-  欠落・字数不足を解消しておき、LLM は単一責任・業務語彙・WHY の質的評価（観点 2〜5）に集中する
+- `agg_purpose_minlength` — purpose の 30 字以上は構造チェックに降格済み（LLM では見ない）。先に走らせて
+  欠落・字数不足を解消しておき、LLM は単一責任・業務語彙・WHY の質的評価（観点 1〜4）に集中する

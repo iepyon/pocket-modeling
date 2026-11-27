@@ -169,6 +169,10 @@ scenarios:
       - cond: 募集締切を過ぎている
         err: ApplicationDeadlinePassed
         when: 締切当日の夜に思い立って申し込もうとしたとき
+    requires:
+      - agg: Meetup
+        in:
+          - PUBLISHED
   - name: 参加者が申込を取り消す
     ctx: registration
     actor: Member
@@ -412,6 +416,24 @@ scenarios:
         when: 開催確定より前に取消が起きたとき（大半の取消はこちら）
       - cond: すでに受付が締め切られている
         err: AttendanceSheetAlreadyClosed
+  - name: システムが中止に伴い受付名簿を取り消す
+    ctx: check-in
+    actor: System
+    cmd: CancelAttendanceSheet
+    evt: AttendanceSheetCancelled
+    agg: AttendanceSheet
+    rules:
+      - rule: a sheet must be cancelled whenever its meetup is cancelled
+        why: 中止されたミートアップの名簿を受付中のまま残すと、会場に来た人が受付できてしまい、中止の知らせと食い違う。
+      - rule: a cancelled sheet must never record absences
+        why: 受付を締め切る扱いにすると、中止された会の参加者が欠席として記録されてしまう。
+    errs:
+      - cond: 名簿がまだ用意されていない
+        err: AttendanceSheetNotPrepared
+        when: 開催確定より前に中止されたとき（大半の中止はこちら）
+      - cond: すでに受付が締め切られている
+        err: AttendanceSheetAlreadyClosed
+        when: 受付締切後・開催完了前に中止されたとき
 contexts:
   - name: meetup-hosting
     label_ja: 開催管理
@@ -623,6 +645,7 @@ contexts:
         PrepareAttendanceSheet: 受付名簿を用意する
         EnrollAttendeeOnSheet: 繰り上がった参加者を名簿に載せる
         DropAttendeeFromSheet: 取り消した参加者を名簿から外す
+        CancelAttendanceSheet: 中止に伴い受付名簿を取り消す
       evts:
         CheckInOpened: 受付が開始された
         AttendeeCheckedIn: 参加者が受付された
@@ -631,15 +654,18 @@ contexts:
         AttendanceSheetPrepared: 受付名簿が用意された
         AttendeeAddedToSheet: 参加者が名簿に加わった
         AttendeeDroppedFromSheet: 参加者が名簿から外れた
+        AttendanceSheetCancelled: 受付名簿が取り消された
       states:
         PREPARED: 受付前（名簿は用意済み）
         OPEN: 受付中
         CLOSED: 締切済み（出欠が確定した）
+        CANCELLED: 取り消し済み（ミートアップの中止に伴い受付を終えた）
       pols:
         MarkNoShowOnCheckInClosed: 受付締切時に未受付を欠席にする
         PrepareSheetOnMeetupConfirmed: 開催確定に合わせて受付名簿を起こす
         AddPromotedAttendeeToSheet: 繰り上げに合わせて名簿に加える
         DropAttendeeFromSheetOnCancellation: 取消に合わせて名簿から外す
+        CancelSheetOnMeetupCancelled: 中止に合わせて受付名簿を取り消す
       qrys:
         NotCheckedInAttendees: まだ受付していない参加確定者の一覧
         CheckInProgress: 当日の受付進捗
@@ -846,6 +872,25 @@ decisions:
       - PromoteWaitlistOnCancellation
       - meetup-hosting
       - registration
+  - id: D9
+    topic: 受付開始後に開催確定のミートアップが中止されたとき、受付名簿をどう扱うか
+    chosen: cancelled-state-on-sheet
+    options:
+      - name: cancelled-state-on-sheet
+        label: 受付名簿に「取り消し済み」の終端状態を持たせ、中止を受けて遷移させる
+        adopted: true
+        why: 締切とは別の終端にできるので、欠席の自動記録や開催完了への連鎖が走らない。受付中でも受付前でも同じ遷移で扱える。
+      - name: forbid-cancel-after-check-in-opened
+        label: 受付を開始したあとは中止できないようにする
+        why_not: 会場が使えなくなるなど、受付開始後に起きるやむを得ない中止の道を塞いでしまう。確定後も中止できる道を残すという既存の判断（中止の rules の note）と食い違う。
+      - name: close-sheet-on-cancel
+        label: 中止を受けて受付名簿を締め切る
+        why_not: 締切になると「受付が締め切られた」の知らせが出て、未受付の参加者が欠席として自動記録される。中止された会の参加者に欠席の記録が付く。
+    affects:
+      - AttendanceSheet
+      - Meetup
+      - CancelSheetOnMeetupCancelled
+      - check-in
 policies:
   - name: PromoteWaitlistOnCancellation
     ctx: registration
@@ -948,6 +993,14 @@ policies:
     agg: Meetup
     within: 即時
     note: 会場を失ったまま募集を続けると申込が積み上がり、あとで全員を無効にすることになる。まず入口を止める。
+  - name: CancelSheetOnMeetupCancelled
+    ctx: check-in
+    trg: MeetupCancelled
+    cmd: CancelAttendanceSheet
+    evt: AttendanceSheetCancelled
+    agg: AttendanceSheet
+    within: 即時
+    note: 受付開始後に中止されても名簿が受付中のまま残らないようにする。受付の締切（CloseCheckIn）は使わない。締切にすると欠席の記録が走るため（D9）。
 domains:
   - name: meetup-operation
     vision: 主催者が、開催するかどうかを迷わず決められ、当日までの席のさばきと出欠の記録に手間を取られない状態をつくる。
@@ -1157,6 +1210,9 @@ aggregates:
             type: string
             required: true
         note: 申込の入口を閉じるだけで、すでに受け付けた申込はそのまま生きている
+    terminalStates:
+      - CANCELLED
+      - HELD
   - name: Registration
     ctx: registration
     purpose: 参加者一人ぶんの席を、申し込んだ順という秩序のもとで「確定・待ち・取消」のいずれかに保つ。
@@ -1301,6 +1357,9 @@ aggregates:
             type: CancellationReason
             required: true
     note: 「確定済み件数が定員を超えない」「同じ参加者の生きた申込は一件だけ」は、いずれもミートアップ単位で申込をまとめて見ないと判定できず、申込一件の中では守れない。担保方式は未決（Q4）。定員という数字は Meetup から供給される（D7）。
+    terminalStates:
+      - CANCELLED
+      - REVOKED
   - name: VenueBooking
     ctx: venue-booking
     purpose: 一つのミートアップに対する会場の押さえを、仮押さえから本予約まで一本の線として保つ。
@@ -1461,6 +1520,10 @@ aggregates:
             type: string
             required: true
     note: 収容人数は venueCapacity として Meetup に供給するだけで、定員がそれを超えないことを守るのは Meetup 側の責任（D7）。また「一つのミートアップに一件だけ」はミートアップ単位でしか判定できず、押さえ一件の中では守れない（Q4）。
+    terminalStates:
+      - RELEASED
+      - CANCELLED
+      - EXPIRED
   - name: AttendanceSheet
     ctx: check-in
     purpose: 開催日当日に「誰が来たか」を、その場で迷わず記録し、締め切った時点で動かない事実として残す。
@@ -1470,10 +1533,12 @@ aggregates:
       - 同じ参加者を二重に受付しない
       - 受付を開始できるのは開催が確定しているミートアップだけ
       - 締切後は出欠を書き換えない
+      - 中止されたミートアップの名簿では、受付も欠席の記録もしない
     states:
       - PREPARED
       - OPEN
       - CLOSED
+      - CANCELLED
     transitions:
       - from: NONE
         to: PREPARED
@@ -1487,6 +1552,15 @@ aggregates:
         to: CLOSED
         via: CloseCheckIn
         when: 主催者が受付を締め切ったとき
+      - from: PREPARED
+        to: CANCELLED
+        via: CancelAttendanceSheet
+        when: 受付を始める前にミートアップが中止されたとき
+      - from: OPEN
+        to: CANCELLED
+        via: CancelAttendanceSheet
+        when: 受付中にミートアップが中止されたとき
+        note: 受付を締め切る扱いにすると、欠席の自動記録や開催完了への連鎖が走ってしまうので、締切とは別の終端にする（D9）
     attrs:
       - name: attendanceSheetId
         type: AttendanceSheetId
@@ -1595,6 +1669,20 @@ aggregates:
           - name: memberId
             type: MemberId
             required: true
+      - name: AttendanceSheetCancelled
+        params:
+          - name: attendanceSheetId
+            type: AttendanceSheetId
+            required: true
+          - name: meetupId
+            type: MeetupId
+            required: true
+          - name: cancelledAt
+            type: datetime
+            required: true
+    terminalStates:
+      - CLOSED
+      - CANCELLED
 queries:
   - name: MeetupCapacityStatus
     ctx: registration
@@ -1667,6 +1755,17 @@ questions:
     topic: ミートアップ単位でしか守れない制約（定員超過・二重申込・押さえの一意性）を、実装でどう担保するか
     why: 参加申込も会場予約も一件ぶんの粒度で設計したため、件数や一意性という「まとめて見ないと分からない制約」は集約の中では守れない。楽観ロックか、ミートアップ単位の席台帳か、方式の選択が要る。
     status: open
+  - id: Q5
+    topic: 受付を開始したあとに開催確定のミートアップを中止すると、受付名簿が開いたままになる。中止時に受付を閉じる仕組みが要るか
+    why: モデル検査（invariants の NoOpenCheckInOnCancelledMeetup）が、開催確定→会場本予約→受付開始→中止（Meetup は CONFIRMED→CANCELLED）の順で、Meetup が CANCELLED なのに AttendanceSheet が OPEN の状態を見つけた。中止を受けて受付名簿を閉じる POLICY も遷移も今は無い。やむを得ない中止（会場が使えなくなる等）は受付開始後にも起こりうる。
+    status: closed
+    note: 'dmlctl quint <file> --run で再現（seed=0x2e6f006a69aa7）。対応案: (a) 受付開始後は中止できないようにする、(b) 中止で受付名簿を閉じる POLICY を足す、(c) 受付名簿に「中止」状態を持たせる。'
+    decision_id: D9
+  - id: Q6
+    topic: 中止後の申込を、状態機械の外（scenario のガード）だけで防いでよいか
+    why: モデル検査（invariants の CancelledMeetupRevokesRegistrations）が、Meetup が CANCELLED になったあとに ApplyForMeetup が通って Registration が CONFIRMED のまま残る状態を見つけた。RevokeRegistrationsOnMeetupCancelled は中止の時点で既にある申込にだけ効く。中止後の申込を弾く条件は scenario の rules にあるかもしれないが、検査モデルはそれを読めないため、本当のモデル漏れか検査の限界かは未判定。
+    status: open
+    note: "検証の限界だった。ガードは scenario の errs（MeetupNotOpenForApplication＝ミートアップが募集中でない）に自然文で書かれていた。検査モデルは自然文を読めないため、scenario に requires（Meetup が PUBLISHED）として形式化したところ、違反は出なくなった。設計上の問いとして残すかは別途判断。"
 actions:
   - id: A1
     text: 募集締切と開催可否を決める締切が同じか別かを主催者に確認する（Q1）。別なら Meetup に締切を2つ持たせる。
@@ -1684,3 +1783,71 @@ actions:
   - id: A5
     text: Q4（ミートアップ単位の制約の担保方式）を設計フェーズの最初の論点として持ち込む。
     done: false
+invariants:
+  - name: HeldMeetupHasBookedVenue
+    kind: safety
+    never:
+      - agg: Meetup
+        in:
+          - HELD
+      - agg: VenueBooking
+        in:
+          - NONE
+          - TENTATIVE
+          - RELEASED
+          - CANCELLED
+          - EXPIRED
+    note: 開催完了したミートアップの会場は、本予約のままであること（仮押さえ・失効・解放のまま開催完了にならない）
+  - name: CancelledMeetupReleasesVenue
+    kind: liveness
+    when:
+      agg: Meetup
+      in:
+        - CANCELLED
+    eventually:
+      agg: VenueBooking
+      in:
+        - NONE
+        - RELEASED
+        - CANCELLED
+        - EXPIRED
+    note: 中止されたミートアップの会場は、いずれ手放される（そもそも押さえていない場合を含む）
+  - name: ConfirmedMeetupGetsAttendanceSheet
+    kind: liveness
+    when:
+      agg: Meetup
+      in:
+        - CONFIRMED
+    eventually:
+      agg: AttendanceSheet
+      in:
+        - PREPARED
+        - OPEN
+        - CLOSED
+    note: 開催確定したミートアップには、いずれ受付名簿が用意される
+  - name: CancelledMeetupRevokesRegistrations
+    kind: liveness
+    when:
+      agg: Meetup
+      in:
+        - CANCELLED
+    eventually:
+      agg: Registration
+      in:
+        - NONE
+        - CANCELLED
+        - REVOKED
+    note: 中止されたミートアップの申込は、いずれ無効化される（申込が無い場合・本人が取り消した場合を含む）
+  - name: CancelledMeetupClosesCheckIn
+    kind: liveness
+    when:
+      agg: Meetup
+      in:
+        - CANCELLED
+    eventually:
+      agg: AttendanceSheet
+      in:
+        - NONE
+        - CANCELLED
+        - CLOSED
+    note: 中止されたミートアップの受付名簿は、いずれ受付中でも受付前でもなくなる。中止と名簿の取り消しは別の集約で非同期に行うので、「同時に起きない」という safety ではなく「いずれ解消する」で見る（D9）

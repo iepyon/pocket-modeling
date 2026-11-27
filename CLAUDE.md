@@ -84,6 +84,8 @@ python3 .claude/skills/eventstorming-facilitator/scripts/dmlctl.py build --all  
 python3 .claude/skills/eventstorming-facilitator/scripts/dmlctl.py build <file> --watch  # 監視モード
 ```
 
+集約をまたぐ性質のモデル検査（スパイク）: DML に `invariants[]`（`kind: safety` は `never` の状態の組が同時に成立しない／`kind: liveness` は `when` ならいずれ `eventually`）を書き、`dmlctl quint <file> --run` で Quint の非同期状態遷移系（POLICY 連鎖・メッセージ拒否・順序の揺れ）に変換して safety をランダムシミュレーションで検査する。他集約の状態への実行前提は `scenarios[].requires` / `policies[].requires`（`{agg, in:[状態]}` の配列）に書くと、配送の条件として検査に反映される（自然文の `errs` / `rules` は読めない）。ランダム検査は稀な経路を見逃すため `--max-samples` は既定 6000（違反が出ないことは保証ではない）。変換モデルと制約（各集約 1 インスタンス・EVT と遷移先の対応づけの過大近似）は `scripts/dml_to_quint.py` 冒頭。`quint` CLI（`npm i -g @informalsystems/quint`）が必要。liveness は「システム側の遷移が尽きた静止状態で `when` が成り立つなら `eventually` も成り立つ」という safety に落として `stepLive`（配送優先スケジューラ）上で検査する（Apalache の temporal 検査は規模的に実用外）。`--verify` は Apalache による有界の網羅検査で遅い（9 ステップ約 2 分）ため、深い状態は `--run` で見る。
+
 意味チェック（観点別 LLM 起動）は Agent tool で `.claude/skills/eventstorming-facilitator/references/checks/*.md` の 6 観点を 1 つずつ呼ぶ。詳細は `references/quality-check.md`。
 
 ## アーキテクチャの押さえどころ
@@ -101,7 +103,7 @@ docs/eventstorming/*.dml.yaml  ──┐
 
 - `eventstorming_build.py` — DML から HTML 全 9 セクション（ストーリー／フロー図／次のアクション／オープンクエスチョン／意思決定ログ／コンテキスト候補／集約候補／リードモデル候補／DML 全文ハイライト）を組み立てる 1,900 行超のレンダラ。Mermaid・自前 SVG・YAML シンタックスハイライトを内蔵。v8 で旧 §1 ハッピーパス＋§2 代替シナリオを §1 ストーリーに統合
 - `validate_dml.py` — `references/dml.schema.yaml`（JSON Schema Draft 2020-12）で **構文** validity を機械検証。空 YAML や非 dict は「未記述」として違反扱いしない（進行中セッション許容）
-- `dmlctl.py` + `dml_filters/views.py` + `dml_filters/checks.py` — AI コンテキスト圧迫を避けるため、観点別スライスの I/O と純構造チェック（LLM 不要）を提供。16 view・19 check が登録済み
+- `dmlctl.py` + `dml_filters/views.py` + `dml_filters/checks.py` — AI コンテキスト圧迫を避けるため、観点別スライスの I/O と純構造チェック（LLM 不要）を提供。view・check は `dmlctl views` / `dmlctl checks` で一覧（`severity: warn` の指摘は終了コードに影響しない）
 - 意味 validity（参照の実在・因果整合・モデル品質）は LLM ベースの `references/checks/*.md` が担う。**スキーマ通過は必要条件であって十分条件ではない**
 
 ## DML の構造（要点）

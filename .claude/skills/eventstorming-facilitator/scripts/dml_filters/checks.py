@@ -12,6 +12,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from .shared import INITIAL_STATE as INITIAL_PSEUDO_STATE
+from .shared import policy_triggers, scenario_evts
+from .shared import to_list as _to_list
+
 
 # ============================================================
 # 共通: Finding 構造
@@ -24,10 +28,18 @@ class Finding:
     path: str                              # 違反箇所の YAML パス（例: aggregates[2]）
     message: str                           # 違反内容の日本語サマリ
     slice: dict[str, Any] = field(default_factory=dict)  # LLM への補助スライス（任意）
+    # "error"（既定・check の終了コードに影響）/ "warn"（報告のみ・終了コードに影響しない）
+    severity: str = "error"
 
 
 def finding_to_dict(f: Finding) -> dict[str, Any]:
-    return {"kind": f.kind, "path": f.path, "message": f.message, "slice": f.slice}
+    return {
+        "kind": f.kind,
+        "severity": f.severity,
+        "path": f.path,
+        "message": f.message,
+        "slice": f.slice,
+    }
 
 
 def _iter_ctx_lang(model: dict):
@@ -50,13 +62,8 @@ def _scenario_events(model: dict) -> set[str]:
     """scenarios[].evt と scenarios[].brs[].evt に現れる EVT 名の集合。"""
     out: set[str] = set()
     for s in model.get("scenarios") or []:
-        if not isinstance(s, dict):
-            continue
-        if s.get("evt"):
-            out.add(s["evt"])
-        for br in s.get("brs") or []:
-            if isinstance(br, dict) and br.get("evt"):
-                out.add(br["evt"])
+        if isinstance(s, dict):
+            out.update(scenario_evts(s))
     return out
 
 
@@ -81,11 +88,8 @@ def _aggregate_events(model: dict) -> set[str]:
     """aggregates[].events[].name に宣言された EVT 名の集合。"""
     out: set[str] = set()
     for a in model.get("aggregates") or []:
-        if not isinstance(a, dict):
-            continue
-        for ev in a.get("events") or []:
-            if isinstance(ev, dict) and ev.get("name"):
-                out.add(ev["name"])
+        if isinstance(a, dict):
+            out |= _agg_event_names(a)
     return out
 
 
@@ -257,11 +261,7 @@ def state_reachability(model: dict) -> list[Finding]:
         for tr in agg.get("transitions") or []:
             if not isinstance(tr, dict):
                 continue
-            to = tr.get("to")
-            if isinstance(to, list):
-                targets.update(to)
-            elif to:
-                targets.add(to)
+            targets.update(_to_list(tr.get("to")))
 
         for state in states:
             if state == initial:
@@ -1114,6 +1114,385 @@ def subdomain_classification(model: dict) -> list[Finding]:
 # ============================================================
 
 
+# ============================================================
+# 集約・集約間連携の整合チェック（構造チェック拡張）
+# ============================================================
+# 状態機械（aggregates[].states/transitions/events）と、それを駆動する
+# scenarios / policies の突き合わせ。集約間の状態前提や非同期挙動は構造では判定できないため
+# モデル検査（別途）の領分とし、ここでは「宣言同士が矛盾していないか」だけを見る。
+
+def _dict_aggs(model: dict):
+    """(i, agg) を dict の AGG だけ yield する。"""
+    for i, agg in enumerate(model.get("aggregates") or []):
+        if isinstance(agg, dict):
+            yield i, agg
+
+
+def _aggs_by_name(model: dict) -> dict[str, dict]:
+    return {a["name"]: a for _, a in _dict_aggs(model) if a.get("name")}
+
+
+def _agg_event_names(agg: dict) -> set[str]:
+    return {
+        ev["name"]
+        for ev in (agg.get("events") or [])
+        if isinstance(ev, dict) and ev.get("name")
+    }
+
+
+def _ambiguous(a: dict, b: dict) -> bool:
+    """同じ (from, via) の 2 遷移が曖昧か（to が重なる、または when が欠ける）。"""
+    overlap = set(_to_list(a.get("to"))) & set(_to_list(b.get("to")))
+    return bool(overlap) or not a.get("when") or not b.get("when")
+
+
+def transition_state_integrity(model: dict) -> list[Finding]:
+    """transitions[].from/to が states に存在するか、(from, via) が重複していないかを検査する。
+
+    - `from: NONE` は「生成前」の擬似状態として許容
+    - `terminalStates` の要素も states に存在する必要がある
+    - 同じ (from, via) の遷移が複数あるとき、`to` が重なる、または `when` の無い遷移が混じると
+      どちらが発火するか曖昧（`when` 付きで `to` が異なる分岐は正当な書き方として許容）
+    """
+    findings: list[Finding] = []
+    for i, agg in _dict_aggs(model):
+        states = agg.get("states") or []
+        if not states:
+            continue
+        name = agg.get("name") or ""
+        known = set(states)
+        seen: dict[tuple[str, str], list[tuple[int, dict]]] = {}
+        for j, tr in enumerate(agg.get("transitions") or []):
+            if not isinstance(tr, dict):
+                continue
+            frm = tr.get("from")
+            if frm and frm != INITIAL_PSEUDO_STATE and frm not in known:
+                findings.append(Finding(
+                    kind="transition_state_integrity",
+                    path=f"aggregates[{i}].transitions[{j}].from",
+                    message=f"AGG '{name}' の遷移 from '{frm}' が states に存在しません",
+                    slice={"agg": name, "from": frm},
+                ))
+            for t in _to_list(tr.get("to")):
+                if t not in known:
+                    findings.append(Finding(
+                        kind="transition_state_integrity",
+                        path=f"aggregates[{i}].transitions[{j}].to",
+                        message=f"AGG '{name}' の遷移 to '{t}' が states に存在しません",
+                        slice={"agg": name, "to": t},
+                    ))
+            key = (frm or "", tr.get("via") or "")
+            if not key[1]:
+                continue
+            prev = next((pj for pj, other in seen.get(key, []) if _ambiguous(tr, other)), None)
+            if prev is not None:
+                findings.append(Finding(
+                    kind="transition_state_integrity",
+                    path=f"aggregates[{i}].transitions[{j}]",
+                    message=(
+                        f"AGG '{name}' の遷移 (from '{key[0]}', via '{key[1]}') が "
+                        f"transitions[{prev}] と曖昧です（to が重複、または when が無い）"
+                    ),
+                    slice={"agg": name, "from": key[0], "via": key[1]},
+                ))
+            seen.setdefault(key, []).append((j, tr))
+        for k, ts in enumerate(agg.get("terminalStates") or []):
+            if ts not in known:
+                findings.append(Finding(
+                    kind="transition_state_integrity",
+                    path=f"aggregates[{i}].terminalStates[{k}]",
+                    message=f"AGG '{name}' の terminalStates '{ts}' が states に存在しません",
+                    slice={"agg": name, "terminalState": ts},
+                ))
+    return findings
+
+
+def scenario_agg_consistency(model: dict) -> list[Finding]:
+    """scenarios[].agg が指す AGG と、scenario の cmd / evt が整合しているかを検査する。
+
+    - agg が aggregates[] に存在しない
+    - evt / brs[].evt が agg の events にない（severity: warn・events を宣言している AGG のみ対象）
+
+    cmd が transitions[].via に無いことは検査しない。playbook §AGG が「生成（creation）」
+    「同一状態内の属性変更」を transitions[] に書かないと定めており、正当な省略と区別できないため。
+    """
+    aggs = _aggs_by_name(model)
+    findings: list[Finding] = []
+    for i, sc in enumerate(model.get("scenarios") or []):
+        if not isinstance(sc, dict):
+            continue
+        agg_name = sc.get("agg")
+        if not agg_name:
+            continue
+        sc_name = sc.get("name") or ""
+        agg = aggs.get(agg_name)
+        if agg is None:
+            findings.append(Finding(
+                kind="scenario_agg_consistency",
+                path=f"scenarios[{i}].agg",
+                message=f"シナリオ '{sc_name}' の agg '{agg_name}' が aggregates[] に存在しません",
+                slice={"scenario": sc_name, "agg": agg_name},
+            ))
+            continue
+        declared = _agg_event_names(agg)
+        if not declared:
+            continue
+        evts = []
+        if sc.get("evt"):
+            evts.append((f"scenarios[{i}].evt", sc["evt"]))
+        for k, br in enumerate(sc.get("brs") or []):
+            if isinstance(br, dict) and br.get("evt"):
+                evts.append((f"scenarios[{i}].brs[{k}].evt", br["evt"]))
+        for path, ev in evts:
+            if ev not in declared:
+                findings.append(Finding(
+                    kind="scenario_agg_consistency",
+                    severity="warn",
+                    path=path,
+                    message=f"シナリオ '{sc_name}' の evt '{ev}' が AGG '{agg_name}' の events に宣言されていません",
+                    slice={"scenario": sc_name, "agg": agg_name, "evt": ev},
+                ))
+    return findings
+
+
+def evt_ownership(model: dict) -> list[Finding]:
+    """EVT の所有 AGG が一意かを検査する。
+
+    - 同じ EVT 名を複数の AGG が events に宣言している（emit 元が曖昧）
+
+    副作用専用 POLICY（agg なし）が発行する EVT はどの AGG にも属さないのが正当なため、
+    「未所属」は検査しない。
+    """
+    owners: dict[str, list[str]] = {}
+    for _, agg in _dict_aggs(model):
+        for ev in _agg_event_names(agg):
+            owners.setdefault(ev, []).append(agg.get("name") or "")
+    findings: list[Finding] = []
+    for ev, names in sorted(owners.items()):
+        if len(names) > 1:
+            findings.append(Finding(
+                kind="evt_ownership",
+                path="aggregates",
+                message=f"EVT '{ev}' が複数の AGG（{', '.join(names)}）の events に宣言されています",
+                slice={"evt": ev, "aggs": names},
+            ))
+    return findings
+
+
+def policy_agg_consistency(model: dict) -> list[Finding]:
+    """policies[] の cmd / evt が、対象 agg の状態機械と整合しているかを検査する。
+
+    - agg が aggregates[] に存在しない
+    - evt が agg の events にない（severity: warn・events を宣言している AGG のみ対象）
+
+    cmd だけで agg を持たない POLICY は副作用専用（通知など）として正当なので検査しない。
+    cmd が transitions[].via に無いことも、scenario と同じ理由で検査しない。
+    """
+    aggs = _aggs_by_name(model)
+    findings: list[Finding] = []
+    for i, pol in enumerate(model.get("policies") or []):
+        if not isinstance(pol, dict):
+            continue
+        name = pol.get("name") or ""
+        agg_name = pol.get("agg")
+        if not agg_name:
+            continue
+        agg = aggs.get(agg_name)
+        if agg is None:
+            findings.append(Finding(
+                kind="policy_agg_consistency",
+                path=f"policies[{i}].agg",
+                message=f"POL '{name}' の agg '{agg_name}' が aggregates[] に存在しません",
+                slice={"policy": name, "agg": agg_name},
+            ))
+            continue
+        declared = _agg_event_names(agg)
+        ev = pol.get("evt")
+        if ev and declared and ev not in declared:
+            findings.append(Finding(
+                kind="policy_agg_consistency",
+                severity="warn",
+                path=f"policies[{i}].evt",
+                message=f"POL '{name}' の evt '{ev}' が AGG '{agg_name}' の events に宣言されていません",
+                slice={"policy": name, "agg": agg_name, "evt": ev},
+            ))
+    return findings
+
+
+def policy_cycle(model: dict) -> list[Finding]:
+    """EVT → POLICY → CMD → EVT の連鎖が閉路を作っていないかを検査する（severity: warn）。
+
+    辺: EVT e を trg/trgs に持つ policy p について、p.evt および p.cmd を発行元とする
+    scenario の evt / brs[].evt へ e → e' を張る。排他分岐の一部だけが循環する場合も
+    「起こりうる」ので警告にとどめる（意図した再試行ループは note などで人が判断する）。
+    """
+    cmd_evts: dict[str, set[str]] = {}
+    for sc in model.get("scenarios") or []:
+        if isinstance(sc, dict) and sc.get("cmd"):
+            cmd_evts.setdefault(sc["cmd"], set()).update(scenario_evts(sc))
+
+    graph: dict[str, set[str]] = {}
+    via_pol: dict[tuple[str, str], set[str]] = {}
+    for pol in model.get("policies") or []:
+        if not isinstance(pol, dict):
+            continue
+        triggers, _mode = policy_triggers(pol)
+        outs = {pol["evt"]} if pol.get("evt") else set()
+        if pol.get("cmd"):
+            outs |= cmd_evts.get(pol["cmd"], set())
+        for t in triggers:
+            graph.setdefault(t, set())
+            for o in outs:
+                graph[t].add(o)
+                graph.setdefault(o, set())
+                via_pol.setdefault((t, o), set()).add(pol.get("name") or "")
+
+    # Tarjan SCC（再帰なし）
+    index: dict[str, int] = {}
+    low: dict[str, int] = {}
+    on_stack: set[str] = set()
+    stack: list[str] = []
+    sccs: list[list[str]] = []
+    counter = 0
+    for root in sorted(graph):
+        if root in index:
+            continue
+        work = [(root, iter(sorted(graph[root])))]
+        index[root] = low[root] = counter
+        counter += 1
+        stack.append(root)
+        on_stack.add(root)
+        while work:
+            node, it = work[-1]
+            advanced = False
+            for nxt in it:
+                if nxt not in index:
+                    index[nxt] = low[nxt] = counter
+                    counter += 1
+                    stack.append(nxt)
+                    on_stack.add(nxt)
+                    work.append((nxt, iter(sorted(graph[nxt]))))
+                    advanced = True
+                    break
+                if nxt in on_stack:
+                    low[node] = min(low[node], index[nxt])
+            if advanced:
+                continue
+            work.pop()
+            if work:
+                parent = work[-1][0]
+                low[parent] = min(low[parent], low[node])
+            if low[node] == index[node]:
+                comp = []
+                while True:
+                    w = stack.pop()
+                    on_stack.discard(w)
+                    comp.append(w)
+                    if w == node:
+                        break
+                sccs.append(comp)
+
+    findings: list[Finding] = []
+    for comp in sccs:
+        members = sorted(comp)
+        if len(members) == 1 and members[0] not in graph[members[0]]:
+            continue  # 自己ループでない単独ノードは閉路ではない
+        pols = sorted({
+            p for (a, b), ps in via_pol.items() if a in comp and b in comp for p in ps
+        })
+        findings.append(Finding(
+            kind="policy_cycle",
+            severity="warn",
+            path="policies",
+            message=(
+                f"EVT 連鎖が循環しうる: {' → '.join(members)}"
+                f"（POL: {', '.join(pols)}）。意図した再試行でなければ停止条件を設ける"
+            ),
+            slice={"events": members, "policies": pols},
+        ))
+    return findings
+
+
+def state_dead_end(model: dict) -> list[Finding]:
+    """出る遷移がなく、終端と宣言されていない状態を報告する（severity: warn）。
+
+    終端状態は `aggregates[].terminalStates` で宣言する。transitions を持たない AGG は対象外。
+    """
+    findings: list[Finding] = []
+    for i, agg in _dict_aggs(model):
+        states = agg.get("states") or []
+        transitions = [t for t in (agg.get("transitions") or []) if isinstance(t, dict)]
+        if not states or not transitions:
+            continue
+        terminals = set(agg.get("terminalStates") or [])
+        outgoing = {t.get("from") for t in transitions}
+        for state in states:
+            if state in terminals or state in outgoing:
+                continue
+            findings.append(Finding(
+                kind="state_dead_end",
+                severity="warn",
+                path=f"aggregates[{i}].states",
+                message=(
+                    f"AGG '{agg.get('name')}' の状態 '{state}' から出る遷移がありません"
+                    "（終端なら terminalStates に宣言する）"
+                ),
+                slice={"agg": agg.get("name"), "state": state},
+            ))
+    return findings
+
+
+def invariant_refs(model: dict) -> list[Finding]:
+    """invariants[] と scenarios/policies[].requires の参照整合性を検査する。
+
+    agg が aggregates[] に存在し、in の状態が agg.states か生成前の NONE であること。
+    """
+    aggs = _aggs_by_name(model)
+    findings: list[Finding] = []
+    conds_by_owner: list[tuple[str, list[tuple[str, Any]]]] = []
+    for i, inv in enumerate(model.get("invariants") or []):
+        if not isinstance(inv, dict):
+            continue
+        name = inv.get("name") or f"#{i}"
+        conds: list[tuple[str, Any]] = []
+        for k, c in enumerate(inv.get("never") or []):
+            conds.append((f"invariants[{i}].never[{k}]", c))
+        for key in ("when", "eventually"):
+            if inv.get(key):
+                conds.append((f"invariants[{i}].{key}", inv[key]))
+        conds_by_owner.append((name, conds))
+    for coll in ("scenarios", "policies"):
+        for i, item in enumerate(model.get(coll) or []):
+            if isinstance(item, dict) and item.get("requires"):
+                label = item.get("name") or f"#{i}"
+                conds_by_owner.append((
+                    label, [(f"{coll}[{i}].requires[{k}]", c) for k, c in enumerate(item["requires"])]
+                ))
+    for name, conds in conds_by_owner:
+        for path, c in conds:
+            if not isinstance(c, dict):
+                continue
+            agg = aggs.get(c.get("agg"))
+            if agg is None:
+                findings.append(Finding(
+                    kind="invariant_refs",
+                    path=f"{path}.agg",
+                    message=f"'{name}' の条件の agg '{c.get('agg')}' が aggregates[] に存在しません",
+                    slice={"invariant": name, "agg": c.get("agg")},
+                ))
+                continue
+            known = set(agg.get("states") or []) | {INITIAL_PSEUDO_STATE}  # NONE=生成前
+            for st in c.get("in") or []:
+                if st not in known:
+                    findings.append(Finding(
+                        kind="invariant_refs",
+                        path=f"{path}.in",
+                        message=f"'{name}' の条件の状態 '{st}' が AGG '{agg.get('name')}' の states に存在しません",
+                        slice={"invariant": name, "agg": agg.get("name"), "state": st},
+                    ))
+    return findings
+
+
 CHECKS: dict[str, Callable[[dict], list[Finding]]] = {
     "orphan_agg": orphan_agg,
     "dangling_cmd": dangling_cmd,
@@ -1134,4 +1513,11 @@ CHECKS: dict[str, Callable[[dict], list[Finding]]] = {
     "bc_vocabulary_collision": bc_vocabulary_collision,
     "crud_cmd_naming": crud_cmd_naming,
     "subdomain_classification": subdomain_classification,
+    "transition_state_integrity": transition_state_integrity,
+    "scenario_agg_consistency": scenario_agg_consistency,
+    "evt_ownership": evt_ownership,
+    "policy_agg_consistency": policy_agg_consistency,
+    "policy_cycle": policy_cycle,
+    "state_dead_end": state_dead_end,
+    "invariant_refs": invariant_refs,
 }

@@ -64,6 +64,9 @@ properties:
   policies:
     type: array
     items: { $ref: "#/$defs/policy" }
+  invariants:                                  # 集約をまたぐ性質（モデル検査の対象・任意）。dml_to_quint.py が読む
+    type: array
+    items: { $ref: "#/$defs/invariant" }
   decisions:                                   # 要素⑥・任意（意思決定ログ：採用/不採用理由）
     type: array
     items: { $ref: "#/$defs/decision" }
@@ -231,6 +234,9 @@ $defs:
       transitions:
         type: array
         items: { $ref: "#/$defs/transition" }
+      terminalStates:                           # 終端状態（出る遷移を持たなくてよい states の部分集合・任意）
+        type: array                             # state_dead_end の除外に使う
+        items: { $ref: "#/$defs/upperSnake" }
       attrs:
         type: array
         items: { $ref: "#/$defs/attribute" }
@@ -364,6 +370,9 @@ $defs:
             additionalProperties: { type: string }                # narratives[].id → 次 scenario.name
             minProperties: 1
       agg: { $ref: "#/$defs/pascalCase" }
+      requires:                                 # 他集約の状態に対する実行前提（読み取りのみ・任意）。モデル検査が配送の条件に使う
+        type: array
+        items: { $ref: "#/$defs/stateCondition" }
       pivotal: { type: boolean }                # v9・節目イベント宣言。この scenario の evt がタイムラインを
                                                 # 大きく区切る Pivotal Event であることを示す（BC 境界候補の手がかり。
                                                 # 1 モデルに 2〜4 個が目安。HTML §3 で強調描画）
@@ -410,6 +419,9 @@ $defs:
       evt: { $ref: "#/$defs/pascalCase" }
       agg: { $ref: "#/$defs/pascalCase" }        # v7・POL の cmd が変更する AGG（scenarios と対称化）
       within: { type: string }                   # EVENTUAL-TX の遅延許容 SLA（自然文。例「火金の週2回」）
+      requires:                                  # 他集約の状態に対する実行前提（読み取りのみ・任意）。モデル検査が配送の条件に使う
+        type: array
+        items: { $ref: "#/$defs/stateCondition" }
       note: { type: string }
     allOf:
       - not:
@@ -435,6 +447,46 @@ $defs:
       why: { type: string }                     # 採用理由（adopted: true のとき推奨）
       why_not: { type: string }                 # 不採用理由（adopted: false/未指定のとき推奨）
       note: { type: string }
+  # ---------- 集約状態の条件（invariants[] の部品） ----------
+  # 「集約 agg が in のいずれかの状態にある」。モデル検査では各集約を 1 インスタンスと見なす。
+  stateCondition:
+    type: object
+    additionalProperties: false
+    required: [agg, in]
+    properties:
+      agg: { $ref: "#/$defs/pascalCase" }
+      in:
+        type: array
+        minItems: 1
+        items: { $ref: "#/$defs/upperSnake" }
+
+  # ---------- Invariant（集約をまたぐ性質・モデル検査用） ----------
+  #   kind: safety   … never のすべての条件が同時に成り立つ状態は存在してはならない
+  #   kind: liveness … when が成り立ったら、いずれ eventually が成り立つ（always (when ⇒ eventually target)）
+  invariant:
+    type: object
+    additionalProperties: false
+    required: [name, kind]
+    properties:
+      name: { $ref: "#/$defs/pascalCase" }
+      kind: { enum: [safety, liveness] }
+      never:
+        type: array
+        minItems: 1
+        items: { $ref: "#/$defs/stateCondition" }
+      when: { $ref: "#/$defs/stateCondition" }
+      eventually: { $ref: "#/$defs/stateCondition" }
+      note: { type: string }
+    allOf:
+      - if: { properties: { kind: { const: safety } } }
+        then:
+          required: [never]
+          not: { anyOf: [{ required: [when] }, { required: [eventually] }] }
+      - if: { properties: { kind: { const: liveness } } }
+        then:
+          required: [when, eventually]
+          not: { required: [never] }
+
   decision:
     type: object
     additionalProperties: false

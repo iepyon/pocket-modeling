@@ -963,6 +963,13 @@ aggregates:
           - name: requestedBy
             type: string
             note: 顧客 / CS / システム
+      - name: OrderConfirmed
+      - name: ShippingInstructed
+      - name: ShippingHoldRequested
+      - name: OrderHeld
+    terminalStates:
+      - CANCELLED
+      - RETURNED
   - name: Payment
     ctx: payment
     purpose: 注文ごとの決済の与信・売上確定・与信取消・返金という資金ライフサイクルを表し、注文状態と独立に「お金が今どうなっているか」に答える
@@ -1013,6 +1020,14 @@ aggregates:
             type: string
             note: カード返金 / 銀行振込
         terminal: true
+      - name: PaymentAuthorized
+      - name: PaymentCaptured
+      - name: AuthorizationVoided
+      - name: PaymentReceived
+      - name: PaymentDeadlineExpired
+    terminalStates:
+      - VOIDED
+      - REFUNDED
   - name: StockItem
     ctx: inventory
     purpose: 商品ごとの帳簿在庫数と引当量を管理し、サイト在庫表示と注文可否判断の元になる数字の整合を守る
@@ -1064,6 +1079,9 @@ aggregates:
         to: CARRIER_RETURNED
         via: ReturnParcelToWarehouse
         when: 不在持ち戻り・受取拒否（月約100件）
+    terminalStates:
+      - HELD
+      - CARRIER_RETURNED
   - name: ReturnCase
     ctx: customer-support
     purpose: 返品の受付から検品結果・返品確定・返金案内までを一つの案件として追跡し、お客様への案内と実際の処理状態のずれを無くす拠り所になる
@@ -1122,6 +1140,10 @@ aggregates:
             type: string
           - name: refundAmount
             type: number
+      - name: ReturnRequested
+    terminalStates:
+      - ACCEPTED
+      - REJECTED
   - name: RefundRequest
     ctx: accounting
     purpose: 返金すべき案件の台帳として、依頼の発生から返金操作完了までを漏れなく・重複なく追跡する
@@ -1163,6 +1185,8 @@ aggregates:
       - name: queuedAt
         type: date
         note: 滞留日数の起点（現状シートでは追えていない）
+    terminalStates:
+      - EXECUTED
 queries:
   - name: PendingShipmentOrders
     ctx: fulfillment

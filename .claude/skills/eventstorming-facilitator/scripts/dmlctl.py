@@ -61,6 +61,10 @@ DML ファイルへの **唯一の I/O 経路** になる。
     dmlctl build <file> [--all]
         HTML を再生成する（eventstorming_build.py のラッパー）。
 
+    dmlctl quint <file> [--out F] [--duplicates] [--run] [--verify]
+        集約・POLICY 連鎖を Quint の状態遷移系に変換し、invariants[] を検査する
+        （dml_to_quint.py のラッパー。--run は quint CLI が必要）。
+
 ## view / check 一覧
 
     dmlctl views      # 利用可能な view 名を列挙
@@ -106,6 +110,7 @@ from dml_filters.hints import resolve_hint  # noqa: E402
 TEMPLATE_PATH = SCRIPT_DIR.parent / "references" / "template.dml.yaml"
 BUILD_SCRIPT = SCRIPT_DIR / "eventstorming_build.py"
 VALIDATE_SCRIPT = SCRIPT_DIR / "validate_dml.py"
+QUINT_SCRIPT = SCRIPT_DIR / "dml_to_quint.py"
 SCHEMA_PATH = SCRIPT_DIR.parent / "references" / "dml.schema.yaml"
 
 
@@ -854,6 +859,11 @@ def cmd_hint(args) -> int:
     return 0
 
 
+def _count_errors(findings) -> int:
+    """終了コードを決める件数。severity=warn は数えない。"""
+    return sum(1 for f in findings if f.severity == "error")
+
+
 def cmd_check(args) -> int:
     if args.all and args.check:
         print("❌ --all と --check は同時指定できません（片方だけ指定）", file=sys.stderr)
@@ -867,10 +877,12 @@ def cmd_check(args) -> int:
         clean: list[str] = []
         results = []
         total = 0
+        errors = 0
         for name, fn in CHECKS.items():
             findings = fn(model)
             if findings:
                 total += len(findings)
+                errors += _count_errors(findings)
                 results.append({
                     "check": name,
                     "count": len(findings),
@@ -878,11 +890,14 @@ def cmd_check(args) -> int:
                 })
             else:
                 clean.append(name)
+        warnings = total - errors
         payload = {
             "mode": "all",
             "checks_run": len(CHECKS),
             "checks_with_findings": len(results),
             "total_findings": total,
+            "total_errors": errors,
+            "total_warnings": warnings,
             "clean": clean,
             "results": results,
         }
@@ -891,17 +906,19 @@ def cmd_check(args) -> int:
                 sys.stdout.write(f"✅ clean — {len(CHECKS)} 観点すべて違反なし\n")
             else:
                 sys.stdout.write(
-                    f"⚠ {len(results)}/{len(CHECKS)} 観点で計 {total} 件の違反\n"
+                    f"⚠ {len(results)}/{len(CHECKS)} 観点で計 {total} 件"
+                    f"（違反 {errors} 件・警告 {warnings} 件）\n"
                 )
                 for r in results:
                     sys.stdout.write(f"\n■ {r['check']}（{r['count']} 件）\n")
                     for f in r["findings"]:
-                        sys.stdout.write(f"  - {f.get('message', '')}\n")
+                        tag = "[warn] " if f.get("severity") == "warn" else ""
+                        sys.stdout.write(f"  - {tag}{f.get('message', '')}\n")
                 sys.stdout.write(f"\nclean: {len(clean)} 観点\n")
         else:
             sys.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2))
             sys.stdout.write("\n")
-        return 0 if total == 0 else 1
+        return 0 if errors == 0 else 1
 
     if args.check not in CHECKS:
         print(f"❌ 未知の check: {args.check}\n   利用可能: {', '.join(CHECKS)}", file=sys.stderr)
@@ -914,7 +931,7 @@ def cmd_check(args) -> int:
     }
     sys.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2))
     sys.stdout.write("\n")
-    return 0 if not findings else 1
+    return 1 if _count_errors(findings) else 0
 
 
 # ============================================================
@@ -925,6 +942,24 @@ def cmd_check(args) -> int:
 def cmd_validate(args) -> int:
     result = subprocess.run(["python3", str(VALIDATE_SCRIPT), args.file], check=False)
     return result.returncode
+
+
+def cmd_quint(args) -> int:
+    cmd = ["python3", str(QUINT_SCRIPT), args.file]
+    if args.out:
+        cmd += ["--out", args.out]
+    if args.duplicates:
+        cmd.append("--duplicates")
+    if args.run:
+        cmd.append("--run")
+    if args.verify:
+        cmd.append("--verify")
+    # 既定値は dml_to_quint.py だけが持つ。指定されたフラグだけ転送する
+    for flag, value in (("--max-steps", args.max_steps), ("--max-samples", args.max_samples),
+                        ("--verify-steps", args.verify_steps)):
+        if value is not None:
+            cmd.append(f"{flag}={value}")
+    return subprocess.run(cmd, check=False).returncode
 
 
 def cmd_build(args) -> int:
@@ -1085,6 +1120,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_build.add_argument("--all", action="store_true", help="全 DML を一括ビルド")
     p_build.add_argument("--watch", action="store_true", help="監視モード")
     p_build.set_defaults(func=cmd_build)
+
+    p_quint = sub.add_parser("quint", help="DML を Quint に変換し invariants[] をモデル検査する（dml_to_quint.py のラッパー）")
+    p_quint.add_argument("file")
+    p_quint.add_argument("--out", help="出力 .qnt（省略時 dist/verify/<name>.qnt）")
+    p_quint.add_argument("--duplicates", action="store_true", help="メッセージの重複配信を許す")
+    p_quint.add_argument("--run", action="store_true", help="quint run で safety / liveness を検査する")
+    p_quint.add_argument("--verify", action="store_true", help="quint verify（Apalache）で検査する（遅い）")
+    p_quint.add_argument("--max-steps", type=int)
+    p_quint.add_argument("--max-samples", type=int)
+    p_quint.add_argument("--verify-steps", type=int)
+    p_quint.set_defaults(func=cmd_quint)
 
     p_views = sub.add_parser("views", help="利用可能な view 名を列挙する")
     p_views.set_defaults(func=cmd_list_views)

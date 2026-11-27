@@ -104,6 +104,28 @@ echo "== dmlctl check --format=summary (P2/P3) =="
 summary_out="$($DMLCTL check "$TMPDIR/t.dml.yaml" --all --format=summary 2>/dev/null || true)"
 echo "$summary_out" | grep -q "観点" && ok "check --format=summary works" || ng "check summary broken"
 
+# severity: warn のみの指摘は終了コードに影響しない／error は exit 1
+cat > "$TMPDIR/warn.dml.yaml" <<EOF
+aggregates:
+  - name: A
+    ctx: bc-a
+    states: [S1, S2]
+    transitions:
+      - { from: S1, to: S2, via: C1 }
+EOF
+$DMLCTL check "$TMPDIR/warn.dml.yaml" --check=state_dead_end >/dev/null 2>&1 \
+  && ok "warn-only check exits 0" || ng "warn-only check should exit 0"
+cat > "$TMPDIR/err.dml.yaml" <<EOF
+aggregates:
+  - name: A
+    ctx: bc-a
+    states: [S1]
+    transitions:
+      - { from: S1, to: GHOST, via: C1 }
+EOF
+$DMLCTL check "$TMPDIR/err.dml.yaml" --check=transition_state_integrity >/dev/null 2>&1 \
+  && ng "error check should exit 1" || ok "error check exits 1"
+
 # ⑥ decisions: adopted を明示しなくても chosen だけで違反にならない
 cat > "$TMPDIR/dec.dml.yaml" <<EOF
 decisions:
@@ -205,6 +227,20 @@ if python3 "$REPO_ROOT/.claude/skills/eventstorming-facilitator/scripts/tests/te
   ok "test_hints passes"
 else
   ng "test_hints failed"
+fi
+
+echo "== structural checks unit tests =="
+if python3 "$REPO_ROOT/.claude/skills/eventstorming-facilitator/scripts/tests/test_structural_checks.py" >/dev/null 2>&1; then
+  ok "test_structural_checks passes"
+else
+  ng "test_structural_checks failed"
+fi
+
+echo "== dml_to_quint unit tests =="
+if python3 "$REPO_ROOT/.claude/skills/eventstorming-facilitator/scripts/tests/test_dml_to_quint.py" >/dev/null 2>&1; then
+  ok "test_dml_to_quint passes"
+else
+  ng "test_dml_to_quint failed"
 fi
 
 echo ""
