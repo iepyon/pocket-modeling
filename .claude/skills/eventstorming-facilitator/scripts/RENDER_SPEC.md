@@ -46,8 +46,9 @@ python3 .claude/skills/eventstorming-facilitator/scripts/eventstorming_build.py 
 # 出力ディレクトリ変更
 python3 .claude/skills/eventstorming-facilitator/scripts/eventstorming_build.py <yaml> --out custom/dir/
 
-# Artifact 化（claude.ai に貼る用、macOS のみクリップボード）
-python3 .claude/skills/eventstorming-facilitator/scripts/eventstorming_build.py <yaml> --artifact --copy
+# Artifact 用（外枠・Mermaid CDN を除去し、上部にグリル質問パネル templates/grill-panel.html を差し込む。
+# Artifact ツールで公開する。手順は SKILL.md「Artifact 上のグリル」）
+python3 .claude/skills/eventstorming-facilitator/scripts/eventstorming_build.py <yaml> --artifact
 ```
 
 ---

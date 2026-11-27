@@ -1,0 +1,476 @@
+<!-- ============================================================
+     グリル質問パネル（Artifact 版 HTML の上部に差し込まれる）
+     - 質問:  db `grill/current`   … Claude が ArtifactData で書く（閲覧者は読むだけ）
+     - 回答:  db `answers/<qid>--<uid>` … 閲覧者がこのパネルから書く
+     - 通知:  回答保存後、mcp「Claude Code Remote」send_message で Claude のセッションを起こす
+     仕様は SKILL.md「Artifact 上のグリル」を参照。DML 由来の内容は一切含まない（固定スニペット）。
+     ============================================================ -->
+<style>
+  .gr {
+    --gr-ink: #263238; --gr-sub: #546E7A; --gr-line: #CFD8DC; --gr-ground: #FFFFFF;
+    --gr-head: #263238; --gr-head-ink: #FFFFFF; --gr-accent: #FF8F00; --gr-accent-soft: #FFF3E0;
+    --gr-pick: #E3F2FD; --gr-pick-line: #1565C0; --gr-ok: #2E7D32; --gr-warn: #B71C1C;
+    margin: 18px 0 8px 0; background: var(--gr-ground); color: var(--gr-ink);
+    border: 1px solid var(--gr-line); border-radius: 10px; overflow: hidden;
+    box-shadow: 0 2px 10px rgba(38, 50, 56, 0.10); max-width: 860px;
+  }
+  .gr-head {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px;
+    padding: 10px 18px; background: var(--gr-head); color: var(--gr-head-ink);
+  }
+  .gr-title { margin: 0; font-size: 1rem; font-weight: 700; letter-spacing: 0.02em; }
+  .gr-phase {
+    font-size: 0.75rem; font-weight: 700; padding: 2px 10px; border-radius: 999px;
+    background: var(--gr-accent); color: #3E2723;
+  }
+  .gr-body { padding: 18px; display: flex; flex-direction: column; gap: 14px; }
+  .gr-q { margin: 0; font-size: 1.25rem; font-weight: 700; line-height: 1.55; text-wrap: balance; }
+  .gr-why, .gr-hint { margin: 0; font-size: 0.875rem; color: var(--gr-sub); }
+  .gr-hint { padding: 10px 14px; background: var(--gr-accent-soft); border-radius: 6px; color: #5D4037; white-space: pre-wrap; }
+  .gr-opts { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+  .gr-opt {
+    font: inherit; text-align: left; cursor: pointer; min-width: 0;
+    padding: 12px 14px; background: var(--gr-ground); color: var(--gr-ink);
+    border: 2px solid var(--gr-line); border-radius: 8px;
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .gr-opt:hover { border-color: #90A4AE; }
+  .gr-opt[aria-pressed="true"] { background: var(--gr-pick); border-color: var(--gr-pick-line); }
+  .gr-opt-label { font-weight: 700; }
+  .gr-opt-desc { font-size: 0.8125rem; color: var(--gr-sub); }
+  .gr-label { font-size: 0.875rem; font-weight: 700; display: block; margin-bottom: 4px; }
+  .gr-text {
+    font: inherit; width: 100%; min-height: 5.2em; resize: vertical;
+    padding: 10px 12px; border: 2px solid var(--gr-line); border-radius: 8px;
+    background: var(--gr-ground); color: var(--gr-ink);
+  }
+  .gr-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  .gr-btn {
+    font: inherit; font-weight: 700; cursor: pointer;
+    padding: 10px 22px; border-radius: 8px; border: 2px solid var(--gr-head);
+    background: var(--gr-head); color: var(--gr-head-ink);
+  }
+  .gr-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .gr-btn.gr-ghost { background: transparent; color: var(--gr-ink); border-color: var(--gr-line); font-weight: 600; }
+  .gr-opt:focus-visible, .gr-btn:focus-visible, .gr-text:focus-visible { outline: 3px solid var(--gr-accent); outline-offset: 2px; }
+  .gr-msg { margin: 0; font-size: 0.875rem; color: var(--gr-sub); }
+  .gr-msg.gr-err { color: var(--gr-warn); }
+  .gr-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+  .gr-step { display: flex; gap: 10px; align-items: baseline; font-size: 0.9375rem; color: var(--gr-sub); }
+  .gr-step .gr-dot {
+    flex: none; width: 1.5em; height: 1.5em; border-radius: 50%; align-self: center;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 0.8125rem; font-weight: 700; background: #ECEFF1; color: #90A4AE;
+  }
+  .gr-step.is-done { color: var(--gr-ink); }
+  .gr-step.is-done .gr-dot { background: #C8E6C9; color: #1B5E20; }
+  .gr-step.is-now { color: var(--gr-ink); font-weight: 700; }
+  .gr-step.is-now .gr-dot { background: #FFE082; color: #6D4C41; animation: gr-pulse 1.4s ease-in-out infinite; }
+  .gr-step.is-fail .gr-dot { background: #FFCDD2; color: var(--gr-warn); }
+  @keyframes gr-pulse { 50% { box-shadow: 0 0 0 5px rgba(255, 143, 0, 0.25); } }
+  @media (prefers-reduced-motion: reduce) { .gr-step.is-now .gr-dot { animation: none; } }
+  .gr-mine { margin: 0; padding: 10px 14px; background: var(--gr-pick); border-radius: 6px; font-size: 0.9375rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .gr-foot { border-top: 1px solid var(--gr-line); padding: 10px 18px; font-size: 0.875rem; }
+  .gr-foot summary { cursor: pointer; color: var(--gr-sub); font-weight: 600; }
+  .gr-log { list-style: none; margin: 10px 0 4px 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+  .gr-log li { min-width: 0; overflow-wrap: anywhere; }
+  .gr-log .gr-log-q { color: var(--gr-sub); }
+  .gr-log .gr-log-a { font-weight: 600; white-space: pre-wrap; }
+  .gr-log .gr-log-who { color: var(--gr-sub); font-size: 0.8125rem; }
+</style>
+
+<section class="gr" id="grill" aria-live="polite">
+  <div class="gr-head">
+    <p class="gr-title" role="heading" aria-level="2">Claude からの質問</p>
+    <span class="gr-phase" id="grill-phase" hidden></span>
+  </div>
+  <div class="gr-body" id="grill-body">
+    <p class="gr-msg">質問を読み込んでいます…</p>
+  </div>
+  <details class="gr-foot" id="grill-foot" hidden>
+    <summary id="grill-foot-sum">これまでの回答</summary>
+    <ul class="gr-log" id="grill-log"></ul>
+  </details>
+</section>
+
+<script>
+(function () {
+  var root = document.getElementById('grill');
+  if (!root) return;
+  // ローカルで開いた HTML（claude.ai の外）ではパネルごと出さない
+  if (!window.claude || typeof window.claude.use !== 'function') { root.hidden = true; return; }
+
+  var SERVER = 'Claude Code Remote';
+  var body = document.getElementById('grill-body');
+  var phaseEl = document.getElementById('grill-phase');
+  var foot = document.getElementById('grill-foot');
+  var footSum = document.getElementById('grill-foot-sum');
+  var logEl = document.getElementById('grill-log');
+
+  var S = {
+    db: null, user: null, uid: null, canWrite: true,
+    q: null, qLoaded: false, answers: [], names: {},
+    sel: null, editing: false, busy: false, formErr: '',
+    notify: {},          // qid -> 'sending' | 'ok' | {code: string}
+    unavailable: '', stale: false, viewKey: '', qSig: ''
+  };
+
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = String(text);
+    return n;
+  }
+  function str(v) { return typeof v === 'string' ? v : ''; }
+
+  function myAnswer() {
+    if (!S.q) return null;
+    for (var i = 0; i < S.answers.length; i++) {
+      var a = S.answers[i];
+      if (a.qid === S.q.qid && a.by === S.uid) return a;
+    }
+    return null;
+  }
+  function othersFor(qid) {
+    return S.answers.filter(function (a) { return a.qid === qid && a.by !== S.uid; });
+  }
+  function answerLine(a) {
+    if (a.hint) return '？（ヒントがほしい）';
+    var parts = [];
+    if (str(a.choice)) parts.push(a.choice);
+    if (str(a.text)) parts.push(a.text);
+    return parts.join(' ／ ') || '（空の回答）';
+  }
+  function nameOf(id) {
+    if (id === S.uid) return 'あなた';
+    return S.names[id] || 'ほかの参加者';
+  }
+
+  // ---------- 描画 ----------
+  function view() {
+    if (S.unavailable) return 'unavailable';
+    if (!S.qLoaded) return 'loading';
+    if (!S.q || !str(S.q.text)) return 'empty';
+    if (S.q.status === 'done') return 'done';
+    if (myAnswer() && !S.editing) return 'sent';
+    return 'form';
+  }
+
+  function render() {
+    var v = view();
+    var qid = S.q ? S.q.qid : '';
+    var n = S.notify[qid];
+    var key = [v, qid, typeof n === 'string' ? n : (n ? n.code : ''), S.canWrite, S.stale, S.qSig].join('|');
+    if (key !== S.viewKey) {
+      S.viewKey = key;
+      body.textContent = '';
+      phaseEl.hidden = !(S.q && str(S.q.phase) && v !== 'unavailable');
+      if (!phaseEl.hidden) phaseEl.textContent = S.q.phase;
+      ({ unavailable: drawUnavailable, loading: drawLoading, empty: drawEmpty,
+         done: drawDone, sent: drawSent, form: drawForm })[v]();
+    }
+    drawOthers();
+    drawLog();
+  }
+
+  function drawUnavailable() { body.appendChild(el('p', 'gr-msg', S.unavailable)); }
+  function drawLoading() {
+    body.appendChild(el('p', 'gr-msg', S.stale
+      ? 'まだデータに接続できていません。通信環境を確認してください。つながり次第、ここに質問が表示されます。'
+      : '質問を読み込んでいます…'));
+  }
+  function drawEmpty() {
+    body.appendChild(el('p', 'gr-q', 'いまは質問がありません'));
+    body.appendChild(el('p', 'gr-msg', 'Claude が次の質問を用意すると、ここに表示されます。答えるたびに、下のモデル図が更新されていきます。'));
+  }
+  function drawDone() {
+    body.appendChild(el('p', 'gr-q', str(S.q.text)));
+    body.appendChild(el('p', 'gr-msg', str(S.q.note) || '質問はここまでです。おつかれさまでした。下のモデル図が最新の状態です。'));
+  }
+
+  function drawQuestion() {
+    body.appendChild(el('p', 'gr-q', str(S.q.text)));
+    if (str(S.q.why)) body.appendChild(el('p', 'gr-why', 'なぜ聞くか：' + S.q.why));
+    if (str(S.q.hint)) body.appendChild(el('p', 'gr-hint', S.q.hint));
+  }
+
+  function drawForm() {
+    drawQuestion();
+    if (!S.canWrite) {
+      body.appendChild(el('p', 'gr-msg', 'このページは閲覧専用で開かれています。回答するには、共有元の方に「コントリビューター」以上の権限をもらってください。'));
+      body.appendChild(el('div', '', '')).id = 'grill-others';
+      return;
+    }
+    var mine = myAnswer();
+    var opts = Array.isArray(S.q.options) ? S.q.options : [];
+    if (S.sel == null && mine && str(mine.choice)) S.sel = mine.choice;
+
+    if (opts.length) {
+      var grid = el('div', 'gr-opts');
+      opts.forEach(function (o, i) {
+        var label = str(o && o.label);
+        if (!label) return;
+        var b = el('button', 'gr-opt');
+        b.type = 'button';
+        b.id = 'grill-opt-' + i;
+        b.setAttribute('aria-pressed', String(S.sel === label));
+        b.appendChild(el('span', 'gr-opt-label', label));
+        if (str(o.desc)) b.appendChild(el('span', 'gr-opt-desc', o.desc));
+        b.addEventListener('click', function () {
+          S.sel = (S.sel === label) ? null : label;
+          Array.prototype.forEach.call(grid.children, function (c) {
+            c.setAttribute('aria-pressed', String(c === b && S.sel === label));
+          });
+        });
+        grid.appendChild(b);
+      });
+      body.appendChild(grid);
+    }
+
+    var wrap = el('div');
+    var lab = el('label', 'gr-label', opts.length ? '自分の言葉で答える・補足する（任意）' : 'あなたの答え');
+    lab.htmlFor = 'grill-text';
+    var ta = el('textarea', 'gr-text');
+    ta.id = 'grill-text';
+    ta.placeholder = '現場の言葉のままで大丈夫です。例外や迷いもそのまま書いてください。';
+    if (mine && str(mine.text) && !mine.hint) ta.value = mine.text;
+    wrap.appendChild(lab); wrap.appendChild(ta);
+    body.appendChild(wrap);
+
+    var row = el('div', 'gr-row');
+    var send = el('button', 'gr-btn', '回答を送る');
+    send.type = 'button'; send.id = 'grill-send';
+    var hint = el('button', 'gr-btn gr-ghost', '？ 考え方のヒントがほしい');
+    hint.type = 'button'; hint.id = 'grill-hint';
+    send.addEventListener('click', function () {
+      var text = ta.value.trim();
+      if (!S.sel && !text) { showFormErr('選択肢を選ぶか、答えを書いてから送ってください。'); return; }
+      submit({ choice: S.sel || '', text: text, hint: false }, [send, hint]);
+    });
+    hint.addEventListener('click', function () {
+      submit({ choice: '', text: ta.value.trim(), hint: true }, [send, hint]);
+    });
+    row.appendChild(send); row.appendChild(hint);
+    body.appendChild(row);
+    var err = el('p', 'gr-msg gr-err', S.formErr);
+    err.id = 'grill-err'; err.hidden = !S.formErr;
+    body.appendChild(err);
+    body.appendChild(el('div')).id = 'grill-others';
+  }
+  function showFormErr(msg) {
+    S.formErr = msg;
+    var e = document.getElementById('grill-err');
+    if (e) { e.textContent = msg; e.hidden = !msg; }
+  }
+
+  var NOTIFY_MSG = {
+    none: 'この画面からは Claude に自動で知らせられません。Claude のチャットで「回答した」と送ると反映されます。',
+    consent: 'Claude への通知が許可されていません。「Claude に知らせる」を押して許可するか、チャットで「回答した」と送ってください。',
+    connector: '「Claude Code Remote」コネクタにつながりません。claude.ai の 設定 → コネクタ を確認するか、チャットで「回答した」と送ってください。',
+    policy: '組織の設定で、この画面から Claude に知らせることができません。進行役の方に「回答した」と伝えてください。',
+    unreachable: 'Claude のセッションに届きませんでした（セッションが終了しているか、あなたのアカウントからは届けられません）。回答は保存済みなので、進行役の方が反映できます。',
+    retry: '一時的に Claude に知らせられませんでした。少し待って「Claude に知らせる」を押すか、チャットで「回答した」と送ってください。'
+  };
+  function notifyText(code) {
+    switch (code) {
+      case 'no_mcp': case 'no_session': case 'not_granted': case 'capability_disabled': case 'capability_removed':
+        return NOTIFY_MSG.none;
+      case 'not_in_manifest': case 'approval_required': case 'consent_required':
+        return NOTIFY_MSG.consent;
+      case 'server_not_connected': case 'needs_reauth': case 'selection_required': case 'server_not_found':
+        return NOTIFY_MSG.connector;
+      case 'blocked_by_policy': return NOTIFY_MSG.policy;
+      case 'tool_error': return NOTIFY_MSG.unreachable;
+      default: return NOTIFY_MSG.retry;
+    }
+  }
+
+  function drawSent() {
+    drawQuestion();
+    var mine = myAnswer();
+    body.appendChild(el('p', 'gr-mine', 'あなたの回答：' + answerLine(mine)));
+
+    var n = S.notify[S.q.qid];
+    var steps = el('ol', 'gr-steps');
+    function step(cls, mark, text) {
+      var li = el('li', 'gr-step ' + cls);
+      li.appendChild(el('span', 'gr-dot', mark));
+      li.appendChild(el('span', '', text));
+      steps.appendChild(li);
+    }
+    step('is-done', '✓', '回答を保存しました');
+    if (n === 'sending') {
+      step('is-now', '2', 'Claude に知らせています…');
+      step('', '3', 'Claude がモデルを更新');
+      step('', '4', '下の図に反映して、次の質問へ');
+    } else if (n === 'ok') {
+      step('is-done', '✓', 'Claude に知らせました');
+      step('is-now', '3', 'Claude がモデルを更新しています（1〜2 分ほど）');
+      step('', '4', '下の図に反映して、次の質問へ（自動で切り替わります）');
+    } else if (n && n.code) {
+      step('is-fail', '!', 'Claude に自動では知らせられませんでした');
+      step('', '3', 'Claude がモデルを更新');
+      step('', '4', '下の図に反映して、次の質問へ');
+    } else {
+      step('is-now', '2', 'Claude の反映待ちです');
+      step('', '3', '下の図に反映して、次の質問へ（自動で切り替わります）');
+    }
+    body.appendChild(steps);
+    if (n && n.code) body.appendChild(el('p', 'gr-msg gr-err', notifyText(n.code)));
+
+    var row = el('div', 'gr-row');
+    if (n !== 'sending') {
+      var again = el('button', 'gr-btn gr-ghost', n === 'ok' ? 'もう一度 Claude に知らせる' : 'Claude に知らせる');
+      again.type = 'button'; again.id = 'grill-notify';
+      again.addEventListener('click', function () { notifyClaude(S.q); });
+      row.appendChild(again);
+    }
+    if (S.canWrite) {
+      var edit = el('button', 'gr-btn gr-ghost', '回答を修正する');
+      edit.type = 'button'; edit.id = 'grill-edit';
+      edit.addEventListener('click', function () { S.editing = true; S.sel = null; S.formErr = ''; render(); });
+      row.appendChild(edit);
+    }
+    body.appendChild(row);
+    body.appendChild(el('div')).id = 'grill-others';
+  }
+
+  function drawOthers() {
+    var box = document.getElementById('grill-others');
+    if (!box || !S.q) return;
+    var list = othersFor(S.q.qid);
+    box.textContent = '';
+    if (!list.length) return;
+    box.appendChild(el('p', 'gr-msg', 'この質問へのほかの人の回答（' + list.length + ' 件）'));
+    var ul = el('ul', 'gr-log');
+    list.forEach(function (a) {
+      var li = el('li');
+      li.appendChild(el('div', 'gr-log-a', answerLine(a)));
+      li.appendChild(el('div', 'gr-log-who', nameOf(a.by)));
+      ul.appendChild(li);
+    });
+    box.appendChild(ul);
+  }
+
+  function drawLog() {
+    var cur = S.q ? S.q.qid : null;
+    var past = S.answers.filter(function (a) { return a.qid !== cur && !a.hint; });
+    foot.hidden = !past.length;
+    if (!past.length) return;
+    footSum.textContent = 'これまでの回答（' + past.length + ' 件）';
+    logEl.textContent = '';
+    past.forEach(function (a) {
+      var li = el('li');
+      li.appendChild(el('div', 'gr-log-q', 'Q. ' + (str(a.question) || '（質問文なし）')));
+      li.appendChild(el('div', 'gr-log-a', 'A. ' + answerLine(a)));
+      li.appendChild(el('div', 'gr-log-who', nameOf(a.by)));
+      logEl.appendChild(li);
+    });
+  }
+
+  // ---------- 書き込み・通知 ----------
+  function submit(ans, buttons) {
+    if (S.busy || !S.q) return;
+    var q = S.q;
+    S.busy = true; showFormErr('');
+    buttons.forEach(function (b) { b.disabled = true; });
+    var doc = {
+      qid: q.qid, by: S.uid, choice: ans.choice, text: ans.text, hint: ans.hint,
+      question: str(q.text), phase: str(q.phase), at: new Date().toISOString()
+    };
+    S.db.collection('answers').doc(q.qid + '--' + S.uid).set(doc).then(function () {
+      S.busy = false; S.editing = false; S.sel = null;
+      // スナップショット到着前でも「送信済み」に切り替える
+      S.answers = S.answers.filter(function (a) { return !(a.qid === doc.qid && a.by === doc.by); });
+      S.answers.unshift(doc);
+      notifyClaude(q);
+    }, function (e) {
+      S.busy = false;
+      buttons.forEach(function (b) { b.disabled = false; });
+      var code = e && e.code;
+      if (code === 'invalid_argument' || code === 'not_granted' || code === 'revoked') {
+        S.canWrite = false; render();
+      } else if (code === 'quota_exceeded') {
+        showFormErr('保存できる回答数の上限に達しました。進行役の方に伝えてください。');
+      } else {
+        showFormErr('回答を保存できませんでした。通信環境を確認して、もう一度送ってください。');
+      }
+    });
+  }
+
+  function notifyClaude(q) {
+    var qid = q.qid;
+    if (S.notify[qid] === 'sending') return;
+    var sid = str(q.sessionId);
+    if (!sid) { S.notify[qid] = { code: 'no_session' }; render(); return; }
+    S.notify[qid] = 'sending'; render();
+    window.claude.use('mcp').then(function (mcp) {
+      if (!mcp) throw { code: 'no_mcp' };
+      return mcp.callTool(SERVER, 'send_message', {
+        session_id: sid,
+        message: '【グリル回答】モデリング用アーティファクトに回答が届きました（qid=' + qid + '）。' +
+          'ファシリテータースキルの「Artifact 上のグリル」の手順どおり、ArtifactData で answers を読み、' +
+          'モデルに反映して再公開し、次の質問を出してください。'
+      });
+    }).then(function () {
+      S.notify[qid] = 'ok'; render();
+    }, function (e) {
+      S.notify[qid] = { code: (e && e.code) || 'upstream_error' }; render();
+    });
+  }
+
+  // ---------- 起動 ----------
+  function loadNames() {
+    if (!S.user || typeof S.user.profiles !== 'function') return;
+    var ids = [];
+    S.answers.forEach(function (a) {
+      if (a.by && a.by !== S.uid && !(a.by in S.names) && ids.indexOf(a.by) < 0) ids.push(a.by);
+    });
+    if (!ids.length) return;
+    ids.forEach(function (id) { S.names[id] = ''; });
+    S.user.profiles(ids.slice(0, 64)).then(function (ps) {
+      ids.forEach(function (id) { S.names[id] = (ps && ps[id] && ps[id].name) || ''; });
+      drawOthers(); drawLog();
+    }, function () {});
+  }
+
+  function start(db, user) {
+    S.db = db; S.user = user;
+    var staleTimer = setTimeout(function () { S.stale = true; render(); }, 10000);
+    function live() { clearTimeout(staleTimer); S.stale = false; }
+
+    db.doc('grill/current').onSnapshot(function (snap) {
+      if (!snap.metadata || !snap.metadata.fromCache) live();
+      var d = snap.exists ? snap.data() : null;
+      var next = d && str(d.qid) ? d : null;
+      if ((next && next.qid) !== (S.q && S.q.qid)) { S.sel = null; S.editing = false; S.formErr = ''; }
+      S.q = next; S.qLoaded = true;
+      // 同じ qid のまま文面だけ変わった場合も描き直す
+      S.qSig = d ? JSON.stringify([d.text, d.why, d.hint, d.status, d.note, d.phase, d.options]) : '';
+      render();
+    }, function () {
+      live(); S.unavailable = '質問データを読み込めませんでした。ページを開き直してください。'; render();
+    });
+
+    db.collection('answers').orderBy('at', 'desc').limit(200).onSnapshot(function (snap) {
+      S.answers = snap.docs.map(function (d) { return d.data() || {}; });
+      loadNames(); render();
+    }, function () {});
+  }
+
+  Promise.all([window.claude.use('db'), window.claude.use('user')]).then(function (r) {
+    var db = r[0], user = r[1];
+    if (!db) {
+      S.unavailable = 'サインインして claude.ai で開くと、ここで Claude の質問に答えられます。';
+      render(); return;
+    }
+    var idP = user && user.id ? user.id() : Promise.resolve(null);
+    var canP = user && user.can ? user.can('data.write') : Promise.resolve(null);
+    Promise.all([idP, canP]).then(function (v) {
+      S.uid = v[0] || 'anon';
+      if (v[1] === false || !v[0]) S.canWrite = false;
+      start(db, user);
+    }, function () { S.uid = 'anon'; S.canWrite = false; start(db, user); });
+  });
+})();
+</script>

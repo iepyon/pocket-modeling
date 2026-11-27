@@ -767,6 +767,14 @@
     .toc-list a:hover, .toc-list a:focus { background: #ECEFF1; outline: none; }
     .toc-list a.toc-h3 { padding-left: 28px; font-size: 0.875rem; color: #546E7A; }
     .toc-list a .toc-num { color: #90A4AE; margin-right: 6px; }
+    /* === スマホ幅: ページ本体を横スクロールさせない（表は自分の枠内でスクロール） === */
+    @media (max-width: 700px) {
+      body { padding: 16px; }
+      .progress { flex-wrap: wrap; }
+      .phase { flex: 1 1 7em; }
+      .lang-table, .attr-table { display: block; max-width: 100%; overflow-x: auto; }
+      code { overflow-wrap: anywhere; }
+    }
   </style>
   <!-- Mermaid: 状態遷移図のレンダリング（CDN 経由でブラウザ側で描画） -->
   <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
