@@ -64,6 +64,9 @@ properties:
   policies:
     type: array
     items: { $ref: "#/$defs/policy" }
+  invariants:                                  # 集約をまたぐ性質（モデル検査の対象・任意）。dml_to_quint.py が読む
+    type: array
+    items: { $ref: "#/$defs/invariant" }
   decisions:                                   # 要素⑥・任意（意思決定ログ：採用/不採用理由）
     type: array
     items: { $ref: "#/$defs/decision" }
@@ -438,6 +441,46 @@ $defs:
       why: { type: string }                     # 採用理由（adopted: true のとき推奨）
       why_not: { type: string }                 # 不採用理由（adopted: false/未指定のとき推奨）
       note: { type: string }
+  # ---------- 集約状態の条件（invariants[] の部品） ----------
+  # 「集約 agg が in のいずれかの状態にある」。モデル検査では各集約を 1 インスタンスと見なす。
+  stateCondition:
+    type: object
+    additionalProperties: false
+    required: [agg, in]
+    properties:
+      agg: { $ref: "#/$defs/pascalCase" }
+      in:
+        type: array
+        minItems: 1
+        items: { $ref: "#/$defs/upperSnake" }
+
+  # ---------- Invariant（集約をまたぐ性質・モデル検査用） ----------
+  #   kind: safety   … never のすべての条件が同時に成り立つ状態は存在してはならない
+  #   kind: liveness … when が成り立ったら、いずれ eventually が成り立つ（always (when ⇒ eventually target)）
+  invariant:
+    type: object
+    additionalProperties: false
+    required: [name, kind]
+    properties:
+      name: { $ref: "#/$defs/pascalCase" }
+      kind: { enum: [safety, liveness] }
+      never:
+        type: array
+        minItems: 1
+        items: { $ref: "#/$defs/stateCondition" }
+      when: { $ref: "#/$defs/stateCondition" }
+      eventually: { $ref: "#/$defs/stateCondition" }
+      note: { type: string }
+    allOf:
+      - if: { properties: { kind: { const: safety } } }
+        then:
+          required: [never]
+          not: { anyOf: [{ required: [when] }, { required: [eventually] }] }
+      - if: { properties: { kind: { const: liveness } } }
+        then:
+          required: [when, eventually]
+          not: { required: [never] }
+
   decision:
     type: object
     additionalProperties: false

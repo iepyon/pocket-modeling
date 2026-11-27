@@ -61,6 +61,10 @@ DML ファイルへの **唯一の I/O 経路** になる。
     dmlctl build <file> [--all]
         HTML を再生成する（eventstorming_build.py のラッパー）。
 
+    dmlctl quint <file> [--out F] [--duplicates] [--run]
+        集約・POLICY 連鎖を Quint の状態遷移系に変換し、invariants[] を検査する
+        （dml_to_quint.py のラッパー。--run は quint CLI が必要）。
+
 ## view / check 一覧
 
     dmlctl views      # 利用可能な view 名を列挙
@@ -106,6 +110,7 @@ from dml_filters.hints import resolve_hint  # noqa: E402
 TEMPLATE_PATH = SCRIPT_DIR.parent / "references" / "template.dml.yaml"
 BUILD_SCRIPT = SCRIPT_DIR / "eventstorming_build.py"
 VALIDATE_SCRIPT = SCRIPT_DIR / "validate_dml.py"
+QUINT_SCRIPT = SCRIPT_DIR / "dml_to_quint.py"
 SCHEMA_PATH = SCRIPT_DIR.parent / "references" / "dml.schema.yaml"
 
 
@@ -934,6 +939,17 @@ def cmd_validate(args) -> int:
     return result.returncode
 
 
+def cmd_quint(args) -> int:
+    cmd = ["python3", str(QUINT_SCRIPT), args.file]
+    if args.out:
+        cmd += ["--out", args.out]
+    if args.duplicates:
+        cmd.append("--duplicates")
+    if args.run:
+        cmd += ["--run", f"--max-steps={args.max_steps}", f"--max-samples={args.max_samples}"]
+    return subprocess.run(cmd, check=False).returncode
+
+
 def cmd_build(args) -> int:
     cmd = ["python3", str(BUILD_SCRIPT)]
     if args.all:
@@ -1092,6 +1108,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_build.add_argument("--all", action="store_true", help="全 DML を一括ビルド")
     p_build.add_argument("--watch", action="store_true", help="監視モード")
     p_build.set_defaults(func=cmd_build)
+
+    p_quint = sub.add_parser("quint", help="DML を Quint に変換し invariants[] をモデル検査する（dml_to_quint.py のラッパー）")
+    p_quint.add_argument("file")
+    p_quint.add_argument("--out", help="出力 .qnt（省略時 dist/verify/<name>.qnt）")
+    p_quint.add_argument("--duplicates", action="store_true", help="メッセージの重複配信を許す")
+    p_quint.add_argument("--run", action="store_true", help="quint run で safety を検査する")
+    p_quint.add_argument("--max-steps", type=int, default=30)
+    p_quint.add_argument("--max-samples", type=int, default=2000)
+    p_quint.set_defaults(func=cmd_quint)
 
     p_views = sub.add_parser("views", help="利用可能な view 名を列挙する")
     p_views.set_defaults(func=cmd_list_views)

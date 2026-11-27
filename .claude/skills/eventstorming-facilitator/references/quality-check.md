@@ -44,6 +44,7 @@ DML 品質チェックは **2 段階**で行う：
 | `evt_ownership` | 同じ EVT を複数 AGG が events に宣言（emit 元が曖昧） | 所有 AGG を 1 つに決める |
 | `policy_agg_consistency` | policies[].agg が aggregates[] に無い（error）／policies[].evt が agg.events に未宣言（warn）。agg 無しの副作用専用 POL は対象外 | agg 名を修正、または agg.events に EVT を追加 |
 | `policy_cycle` | EVT→POLICY→CMD→EVT の連鎖が閉路（warn） | 意図した再試行でなければ停止条件を設ける |
+| `invariant_refs` | invariants[] の agg が aggregates[] に無い／in の状態が agg.states に無い | 参照を修正 |
 | `state_dead_end` | 出る遷移が無く terminalStates にも無い状態（warn） | 終端なら `aggregates[].terminalStates` に宣言、でなければ遷移を追加 |
 
 **severity**: 各 finding は `severity`（`error` / `warn`）を持つ。`warn` は報告のみで終了コードに影響しない（意図的な書き方と区別できない可能性があるため）。

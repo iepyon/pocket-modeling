@@ -1465,6 +1465,44 @@ def state_dead_end(model: dict) -> list[Finding]:
     return findings
 
 
+def invariant_refs(model: dict) -> list[Finding]:
+    """invariants[] の参照整合性（agg の実在・in の状態が agg.states に存在）を検査する。"""
+    aggs = {a.get("name"): a for _, a in _dict_aggs(model) if a.get("name")}
+    findings: list[Finding] = []
+    for i, inv in enumerate(model.get("invariants") or []):
+        if not isinstance(inv, dict):
+            continue
+        name = inv.get("name") or f"#{i}"
+        conds: list[tuple[str, Any]] = []
+        for k, c in enumerate(inv.get("never") or []):
+            conds.append((f"invariants[{i}].never[{k}]", c))
+        for key in ("when", "eventually"):
+            if inv.get(key):
+                conds.append((f"invariants[{i}].{key}", inv[key]))
+        for path, c in conds:
+            if not isinstance(c, dict):
+                continue
+            agg = aggs.get(c.get("agg"))
+            if agg is None:
+                findings.append(Finding(
+                    kind="invariant_refs",
+                    path=f"{path}.agg",
+                    message=f"invariant '{name}' の agg '{c.get('agg')}' が aggregates[] に存在しません",
+                    slice={"invariant": name, "agg": c.get("agg")},
+                ))
+                continue
+            known = set(agg.get("states") or [])
+            for st in c.get("in") or []:
+                if st not in known:
+                    findings.append(Finding(
+                        kind="invariant_refs",
+                        path=f"{path}.in",
+                        message=f"invariant '{name}' の状態 '{st}' が AGG '{agg.get('name')}' の states に存在しません",
+                        slice={"invariant": name, "agg": agg.get("name"), "state": st},
+                    ))
+    return findings
+
+
 CHECKS: dict[str, Callable[[dict], list[Finding]]] = {
     "orphan_agg": orphan_agg,
     "dangling_cmd": dangling_cmd,
@@ -1491,4 +1529,5 @@ CHECKS: dict[str, Callable[[dict], list[Finding]]] = {
     "policy_agg_consistency": policy_agg_consistency,
     "policy_cycle": policy_cycle,
     "state_dead_end": state_dead_end,
+    "invariant_refs": invariant_refs,
 }

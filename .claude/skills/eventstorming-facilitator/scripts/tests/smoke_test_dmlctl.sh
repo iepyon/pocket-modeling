@@ -236,6 +236,13 @@ else
   ng "test_structural_checks failed"
 fi
 
+echo "== dml_to_quint unit tests =="
+if python3 "$REPO_ROOT/.claude/skills/eventstorming-facilitator/scripts/tests/test_dml_to_quint.py" >/dev/null 2>&1; then
+  ok "test_dml_to_quint passes"
+else
+  ng "test_dml_to_quint failed"
+fi
+
 echo ""
 echo "==================="
 echo " PASS: $PASS  FAIL: $FAIL"
