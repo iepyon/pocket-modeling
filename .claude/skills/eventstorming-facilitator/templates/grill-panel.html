@@ -102,13 +102,20 @@
   .gm-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
   .gm-title { margin: 0; font-size: 1rem; font-weight: 700; }
   .gm-state { font-size: 0.8125rem; font-weight: 700; padding: 2px 10px; border-radius: 999px; background: #C8E6C9; color: #1B5E20; }
-  .gm-state.is-busy { background: #FFE082; color: #6D4C41; animation: gr-pulse 1.4s ease-in-out infinite; }
-  @media (prefers-reduced-motion: reduce) { .gm-state.is-busy { animation: none; } }
+  .gm-state.is-busy { background: #FFE082; color: #6D4C41; display: inline-flex; align-items: center; }
+  .gm-spin {
+    flex: none; display: inline-block; width: 1em; height: 1em; vertical-align: -0.15em;
+    border: 2.5px solid rgba(255, 143, 0, 0.28); border-top-color: #FF8F00; border-radius: 50%;
+    animation: gm-turn 0.8s linear infinite;
+  }
+  .gm-state .gm-spin { margin-right: 6px; border-color: rgba(109, 76, 65, 0.25); border-top-color: #6D4C41; }
+  @keyframes gm-turn { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .gm-spin { animation-duration: 2.4s; } }
   .gm-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 0.875rem; }
   .gm-list li { display: flex; gap: 8px; min-width: 0; overflow-wrap: anywhere; }
   .gm-list .gm-mark { flex: none; font-weight: 700; color: #1B5E20; }
   .gm-list li.is-wait { color: #546E7A; }
-  .gm-list li.is-wait .gm-mark { color: #FF8F00; }
+  .gm-list li.is-wait { align-items: center; }
 </style>
 
 <section class="gr" id="grill">
@@ -417,11 +424,19 @@
     modelBox.hidden = !(wait.length || done.length);
     if (modelBox.hidden) return;
     modelState.className = 'gm-state' + (wait.length ? ' is-busy' : '');
-    modelState.textContent = wait.length ? '反映中（' + wait.length + ' 件）' : 'すべて反映済み';
+    modelState.textContent = '';
+    if (wait.length) {
+      var sp = el('span', 'gm-spin'); sp.setAttribute('aria-hidden', 'true');
+      modelState.appendChild(sp);
+      modelState.appendChild(el('span', '', '反映中（' + wait.length + ' 件）'));
+    } else {
+      modelState.textContent = 'すべて反映済み';
+    }
     modelList.textContent = '';
     wait.slice(0, 3).forEach(function (a) {
       var li = el('li', 'is-wait');
-      li.appendChild(el('span', 'gm-mark', '…'));
+      var s2 = el('span', 'gm-spin'); s2.setAttribute('aria-hidden', 'true');
+      li.appendChild(s2);
       li.appendChild(el('span', '', '「' + answerLine(a) + '」を下のモデルに反映しています'));
       modelList.appendChild(li);
     });
