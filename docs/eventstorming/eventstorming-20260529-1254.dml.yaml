@@ -291,6 +291,9 @@ aggregates:
             type: EventId
           - name: concludedAt
             type: datetime
+    terminalStates:
+      - CANCELLED
+      - CONCLUDED
   - name: Participation
     ctx: participation
     purpose: 1 参加者 1 イベントへの申込状態を保持し、定員と繰上ルールを満たす遷移のみ許す
@@ -371,6 +374,8 @@ aggregates:
           - {name: cancelReason, type: string}
           - {name: cancelledAt, type: datetime}
 
+    terminalStates:
+      - CANCELLED
   - name: Attendance
     ctx: attendance
     purpose: 確定参加者が実際に会場に来たか／来なかったかを当日に記録する
@@ -411,6 +416,9 @@ aggregates:
           - {name: noShowDetectedAt, type: datetime}
         terminal: true
 
+    terminalStates:
+      - CHECKED_IN
+      - NO_SHOW
   - name: Feedback
     ctx: feedback
     purpose: 開催終了後の任意フィードバック（評点 + 自由記述）を 1 参加者 1 件で保持する
@@ -442,6 +450,8 @@ aggregates:
         terminal: true
 
 # ---------- Scenarios（フェーズ 5: rules / errs 完成） ----------
+    terminalStates:
+      - SUBMITTED
 scenarios:
   # event-planning
   - name: 主催者がイベントを下書きする

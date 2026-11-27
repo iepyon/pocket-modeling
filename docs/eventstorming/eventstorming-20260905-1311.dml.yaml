@@ -1161,6 +1161,9 @@ aggregates:
             type: string
             required: true
         note: 申込の入口を閉じるだけで、すでに受け付けた申込はそのまま生きている
+    terminalStates:
+      - CANCELLED
+      - HELD
   - name: Registration
     ctx: registration
     purpose: 参加者一人ぶんの席を、申し込んだ順という秩序のもとで「確定・待ち・取消」のいずれかに保つ。
@@ -1305,6 +1308,9 @@ aggregates:
             type: CancellationReason
             required: true
     note: 「確定済み件数が定員を超えない」「同じ参加者の生きた申込は一件だけ」は、いずれもミートアップ単位で申込をまとめて見ないと判定できず、申込一件の中では守れない。担保方式は未決（Q4）。定員という数字は Meetup から供給される（D7）。
+    terminalStates:
+      - CANCELLED
+      - REVOKED
   - name: VenueBooking
     ctx: venue-booking
     purpose: 一つのミートアップに対する会場の押さえを、仮押さえから本予約まで一本の線として保つ。
@@ -1465,6 +1471,10 @@ aggregates:
             type: string
             required: true
     note: 収容人数は venueCapacity として Meetup に供給するだけで、定員がそれを超えないことを守るのは Meetup 側の責任（D7）。また「一つのミートアップに一件だけ」はミートアップ単位でしか判定できず、押さえ一件の中では守れない（Q4）。
+    terminalStates:
+      - RELEASED
+      - CANCELLED
+      - EXPIRED
   - name: AttendanceSheet
     ctx: check-in
     purpose: 開催日当日に「誰が来たか」を、その場で迷わず記録し、締め切った時点で動かない事実として残す。
@@ -1599,6 +1609,8 @@ aggregates:
           - name: memberId
             type: MemberId
             required: true
+    terminalStates:
+      - CLOSED
 queries:
   - name: MeetupCapacityStatus
     ctx: registration
