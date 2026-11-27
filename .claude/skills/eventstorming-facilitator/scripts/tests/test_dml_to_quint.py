@@ -101,6 +101,26 @@ class GenerateTest(unittest.TestCase):
         self.assertIn("deliver_Order_Confirm_noop_0", q)  # 余る brs は状態不変で EVT のみ
 
 
+class RequiresTest(unittest.TestCase):
+    def with_requires(self):
+        m = model()
+        m["scenarios"][2]["requires"] = [{"agg": "Order", "in": ["PLACED"]}]  # 在庫を引き当てる
+        m["policies"][0]["requires"] = [{"agg": "Order", "in": ["PLACED"]}]
+        return m
+
+    def test_requires_guards_delivery_and_rejects_otherwise(self):
+        q = generate(self.with_requires())
+        self.assertIn('(st_Order == "PLACED")', q)  # 配送の前提
+        self.assertIn("reject_Stock_Reserve", q)
+        self.assertRegex(q, r"or \{ and \{ st_Stock != \"FREE\" \}, not\(and \{ \(st_Order == \"PLACED\"\) \}\) \}")
+
+    def test_requires_refs_are_checked(self):
+        m = self.with_requires()
+        m["scenarios"][2]["requires"] = [{"agg": "Ghost", "in": ["X"]}]
+        paths = [f.path for f in invariant_refs(m)]
+        self.assertEqual(paths, ["scenarios[2].requires[0].agg"])
+
+
 class InvariantRefsTest(unittest.TestCase):
     def test_clean_and_findings(self):
         good = [{"name": "I", "kind": "safety", "never": [{"agg": "Order", "in": ["PLACED"]}]}]

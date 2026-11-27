@@ -37,6 +37,8 @@
   eventually も成り立つ」を safety として検査する（`quiet_<Name>` / `allQuiescent`）。
   静止状態に達したのに結果が出ていないなら本当の行き詰まりなので、反例になる。
   LTL の liveness（`live_<Name>`）も `temporal` として出力するが、現状は検査に使わない
+- requires: scenarios / policies の `requires`（他集約の状態への実行前提）は配送の条件になる。
+  満たされないときのメッセージは拒否される（状態不変・EVT なし）。自然文の `errs` / `rules` は読めない
 - 制約: 1 インスタンス抽象のため、「申込 N 件のうち 1 件」のような多重度は表せない
 """
 
@@ -135,6 +137,16 @@ class Model:
                 single.append(p["evt"])
         return single, brs
 
+    def requires(self, agg_name: str | None, cmd: str) -> list[dict]:
+        """(agg, cmd) の scenarios / policies に書かれた requires（重複は除く）。"""
+        out: list[dict] = []
+        for src in list(self.scenarios) + list(self.policies):
+            if src.get("cmd") == cmd and (src.get("agg") or None) == (agg_name or None):
+                for c in src.get("requires") or []:
+                    if isinstance(c, dict) and c not in out:
+                        out.append(c)
+        return out
+
     def all_msgs(self) -> list[tuple[str | None, str]]:
         seen: list[tuple[str | None, str]] = []
         for src in list(self.scenarios) + list(self.policies):
@@ -227,6 +239,9 @@ class Gen:
             single, brs = m.evt_plan(agg_name, cmd)
             consume = {"inbox": f"inbox.exclude({qset([msg])})"} if not m.duplicates else {}
             guard_in = f"inbox.contains({qstr(msg)})"
+            req = [self.cond(c) for c in m.requires(agg_name, cmd)]
+            req_ok = [r for r in req]
+            req_ng = ["not(and { " + ", ".join(req) + " })"] if req else []
             stv = f"st_{ident(agg_name)}" if agg_name in m.stateful else None
             if trs and stv:
                 groups: list[tuple[str, ...]] = []
@@ -242,7 +257,7 @@ class Gen:
                     for ti, to in enumerate(tos):
                         self.action(
                             f"deliver_{base}_{k}_{ti}",
-                            [guard_in, f"{stv} == {qstr(frm)}"],
+                            [guard_in, f"{stv} == {qstr(frm)}"] + req_ok,
                             {**consume, stv: qstr(to), "emitted": self.emit(evts)},
                         )
                 froms = sorted({f for f, _ in trs})
@@ -251,21 +266,21 @@ class Gen:
                     for ei, ev in enumerate(brs[len(groups):]):
                         self.action(
                             f"deliver_{base}_noop_{ei}",
-                            [guard_in, "(" + " or ".join(f"{stv} == {qstr(f)}" for f in froms) + ")"],
+                            [guard_in, "(" + " or ".join(f"{stv} == {qstr(f)}" for f in froms) + ")"] + req_ok,
                             {**consume, "emitted": self.emit(list(single) + [ev])},
                         )
                 # 現在状態から遷移できない → 拒否
-                self.action(
-                    f"reject_{base}",
-                    [guard_in] + [f"{stv} != {qstr(f)}" for f in froms],
-                    consume,
-                )
+                mismatch = "and { " + ", ".join(f"{stv} != {qstr(f)}" for f in froms) + " }"
+                reject = f"or {{ {mismatch}, {req_ng[0]} }}" if req_ng else mismatch
+                self.action(f"reject_{base}", [guard_in, reject], consume)
             else:
                 # 遷移を持たない CMD（属性変更・副作用）: 状態不変で EVT を発行
                 choices = brs if brs else [None]
                 for ci, ch in enumerate(choices):
                     evts = list(single) + ([ch] if ch else [])
-                    self.action(f"deliver_{base}_{ci}", [guard_in], {**consume, "emitted": self.emit(evts)})
+                    self.action(f"deliver_{base}_{ci}", [guard_in] + req_ok, {**consume, "emitted": self.emit(evts)})
+                if req_ng:
+                    self.action(f"reject_{base}", [guard_in] + req_ng, consume)
 
         # --- POLICY 発火 ---
         for i, p in enumerate(m.policies):
@@ -374,7 +389,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--verify", action="store_true", help="quint verify（Apalache）で safety と liveness を検査する")
     ap.add_argument("--verify-steps", type=int, default=12, help="--verify の探索ステップ数上限")
     ap.add_argument("--max-steps", type=int, default=30)
-    ap.add_argument("--max-samples", type=int, default=2000)
+    ap.add_argument("--max-samples", type=int, default=6000)
     args = ap.parse_args(argv)
 
     src = Path(args.file)

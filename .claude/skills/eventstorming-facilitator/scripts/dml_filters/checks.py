@@ -1466,9 +1466,13 @@ def state_dead_end(model: dict) -> list[Finding]:
 
 
 def invariant_refs(model: dict) -> list[Finding]:
-    """invariants[] の参照整合性（agg の実在・in の状態が agg.states か生成前の NONE）を検査する。"""
+    """invariants[] と scenarios/policies[].requires の参照整合性を検査する。
+
+    agg が aggregates[] に存在し、in の状態が agg.states か生成前の NONE であること。
+    """
     aggs = {a.get("name"): a for _, a in _dict_aggs(model) if a.get("name")}
     findings: list[Finding] = []
+    conds_by_owner: list[tuple[str, list[tuple[str, Any]]]] = []
     for i, inv in enumerate(model.get("invariants") or []):
         if not isinstance(inv, dict):
             continue
@@ -1479,6 +1483,15 @@ def invariant_refs(model: dict) -> list[Finding]:
         for key in ("when", "eventually"):
             if inv.get(key):
                 conds.append((f"invariants[{i}].{key}", inv[key]))
+        conds_by_owner.append((name, conds))
+    for coll in ("scenarios", "policies"):
+        for i, item in enumerate(model.get(coll) or []):
+            if isinstance(item, dict) and item.get("requires"):
+                label = item.get("name") or f"#{i}"
+                conds_by_owner.append((
+                    label, [(f"{coll}[{i}].requires[{k}]", c) for k, c in enumerate(item["requires"])]
+                ))
+    for name, conds in conds_by_owner:
         for path, c in conds:
             if not isinstance(c, dict):
                 continue
@@ -1487,7 +1500,7 @@ def invariant_refs(model: dict) -> list[Finding]:
                 findings.append(Finding(
                     kind="invariant_refs",
                     path=f"{path}.agg",
-                    message=f"invariant '{name}' の agg '{c.get('agg')}' が aggregates[] に存在しません",
+                    message=f"'{name}' の条件の agg '{c.get('agg')}' が aggregates[] に存在しません",
                     slice={"invariant": name, "agg": c.get("agg")},
                 ))
                 continue
@@ -1497,7 +1510,7 @@ def invariant_refs(model: dict) -> list[Finding]:
                     findings.append(Finding(
                         kind="invariant_refs",
                         path=f"{path}.in",
-                        message=f"invariant '{name}' の状態 '{st}' が AGG '{agg.get('name')}' の states に存在しません",
+                        message=f"'{name}' の条件の状態 '{st}' が AGG '{agg.get('name')}' の states に存在しません",
                         slice={"invariant": name, "agg": agg.get("name"), "state": st},
                     ))
     return findings

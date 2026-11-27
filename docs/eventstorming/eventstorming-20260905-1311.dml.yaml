@@ -169,6 +169,10 @@ scenarios:
       - cond: 募集締切を過ぎている
         err: ApplicationDeadlinePassed
         when: 締切当日の夜に思い立って申し込もうとしたとき
+    requires:
+      - agg: Meetup
+        in:
+          - PUBLISHED
   - name: 参加者が申込を取り消す
     ctx: registration
     actor: Member
@@ -1676,7 +1680,8 @@ questions:
     topic: 中止後の申込を、状態機械の外（scenario のガード）だけで防いでよいか
     why: モデル検査（invariants の CancelledMeetupRevokesRegistrations）が、Meetup が CANCELLED になったあとに ApplyForMeetup が通って Registration が CONFIRMED のまま残る状態を見つけた。RevokeRegistrationsOnMeetupCancelled は中止の時点で既にある申込にだけ効く。中止後の申込を弾く条件は scenario の rules にあるかもしれないが、検査モデルはそれを読めないため、本当のモデル漏れか検査の限界かは未判定。
     status: open
-    note: dmlctl quint <file> --run で再現。判定には「申込を受け付けるときに Meetup の状態を見る」ガードが rules に書かれているかの確認が要る。
+    note:
+      検証の限界だった。ガードは scenario の errs（MeetupNotOpenForApplication: ミートアップが募集中でない）に自然文で書かれていた。検査モデルは自然文を読めないため、scenario に requires（Meetup が PUBLISHED）として形式化したところ、違反は出なくなった。設計上の問いとして残すかは別途判断。
 actions:
   - id: A1
     text: 募集締切と開催可否を決める締切が同じか別かを主催者に確認する（Q1）。別なら Meetup に締切を2つ持たせる。

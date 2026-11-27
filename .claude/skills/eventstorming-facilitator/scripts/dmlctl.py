@@ -1115,7 +1115,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_quint.add_argument("--duplicates", action="store_true", help="メッセージの重複配信を許す")
     p_quint.add_argument("--run", action="store_true", help="quint run で safety を検査する")
     p_quint.add_argument("--max-steps", type=int, default=30)
-    p_quint.add_argument("--max-samples", type=int, default=2000)
+    p_quint.add_argument("--max-samples", type=int, default=6000)
     p_quint.set_defaults(func=cmd_quint)
 
     p_views = sub.add_parser("views", help="利用可能な view 名を列挙する")
