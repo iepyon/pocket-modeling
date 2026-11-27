@@ -152,9 +152,9 @@ scenarios:
     qry:
       - MeetupCapacityStatus
     rules:
-      - rule: confirmed registrations must never exceed the meetup capacity
-        why: 定員は会場に入れる人数そのものなので、一件でも超えると当日に立ち見か門前払いが発生する。
-        note: 定員という数字は Meetup が持ち、席の配分は Registration が担うため、この不変条件は 2 つの集約にまたがる。守り方は D7 で決めた。
+      - rule: confirmed registrations should stay within the meetup capacity; a small overshoot from simultaneous applications is tolerated
+        why: 定員は会場の収容人数より少なめに設定しているので、同時の申込で 1〜2 人超えても会場には入れる。厳密に止めるより、申し込めた人を確定にするほうが参加者にとって分かりやすい。
+        note: 定員という数字は Meetup が持ち、席の配分は Registration が担う（D7）。厳密な上限ではなく目安として扱う（D12）。
       - rule: a member must not hold more than one live registration per meetup
         why: 同じ人が二重に席を取ると、待っている人の順番が不当に後ろへ押しやられる。
       - rule: applications must not be accepted outside the published period
@@ -372,7 +372,6 @@ scenarios:
     qry:
       - WaitlistHead
     cmd: PromoteWaitlistedRegistration
-    evt: RegistrationPromoted
     agg: Registration
     rules:
       - rule: promotion must not happen after the cancellation deadline
@@ -386,6 +385,14 @@ scenarios:
       - cond: キャンセル待ちが一人もいない
         err: NoWaitlistedRegistration
         when: 定員に余裕があるまま誰かが取り消したとき
+    brMode: exclusive
+    brs:
+      - cond: 取消締切まで余裕がある
+        evt: RegistrationPromoted
+      - cond: 取消締切が近い
+        evt: PromotionOffered
+        next: 参加者が繰り上げを承諾する
+        note: 「近い」の境目と返事の期限の長さは確認中（Q3）
   - name: システムが繰り上がった参加者を名簿に載せる
     ctx: check-in
     actor: System
@@ -434,6 +441,34 @@ scenarios:
       - cond: すでに受付が締め切られている
         err: AttendanceSheetAlreadyClosed
         when: 受付締切後・開催完了前に中止されたとき
+  - name: 参加者が繰り上げを承諾する
+    ctx: registration
+    actor: Member
+    cmd: AcceptPromotion
+    evt: RegistrationPromoted
+    agg: Registration
+    rules:
+      - rule: a late promotion must not be confirmed without the member accepting it
+        why: 締切間際に自動で確定にすると、もう行けなくなっていた人が席を持ったまま欠席し、席が二重に無駄になる。
+    errs:
+      - cond: 返事の期限を過ぎている
+        err: PromotionOfferNoLongerOpen
+        when: 確認の連絡に数日後に気づいて返事をしたとき
+  - name: 参加者が繰り上げを辞退する
+    ctx: registration
+    actor: Member
+    cmd: DeclinePromotion
+    evt: PromotionDeclined
+    agg: Registration
+  - name: システムが返事のない繰り上げ確認を時間切れにする
+    ctx: registration
+    actor: System
+    cmd: ExpirePromotionOffer
+    evt: PromotionOfferExpired
+    agg: Registration
+    rules:
+      - rule: an unanswered promotion offer must not hold a seat past its reply deadline
+        why: 返事を待ち続けると、来られる人が後ろにいるのに席が空いたまま開催日を迎える。
 contexts:
   - name: meetup-hosting
     label_ja: 開催管理
@@ -579,12 +614,18 @@ contexts:
         CancelRegistration: 申込を取り消す
         PromoteWaitlistedRegistration: キャンセル待ちを繰り上げる
         RevokeRegistration: 中止に伴って申込を無効にする
+        AcceptPromotion: 繰り上げを承諾する
+        DeclinePromotion: 繰り上げを辞退する
+        ExpirePromotionOffer: 返事のない繰り上げ確認を時間切れにする
       evts:
         RegistrationConfirmed: 参加が確定した
         RegistrationWaitlisted: キャンセル待ちになった
         RegistrationCancelled: 申込が取り消された
         RegistrationPromoted: キャンセル待ちから繰り上がった
         RegistrationRevoked: 中止に伴って申込が無効になった
+        PromotionOffered: 繰り上げの確認が送られた
+        PromotionDeclined: 繰り上げが辞退された
+        PromotionOfferExpired: 繰り上げの確認が時間切れになった
       vos:
         WaitlistPosition: キャンセル待ちの順番
       states:
@@ -592,13 +633,17 @@ contexts:
         WAITLISTED: キャンセル待ち
         CANCELLED: 参加者の意思で取消
         REVOKED: 中止に伴い無効
+        PROMOTION_OFFERED: 繰り上げの承諾待ち（席は取ってあるが、まだ確定ではない）
       pols:
         PromoteWaitlistOnCancellation: 取消が出たらキャンセル待ちを繰り上げる
         RevokeRegistrationsOnMeetupCancelled: 中止が決まったら申込を一括で無効にする
+        PromoteNextWhenOfferReleased: 辞退や時間切れで空いた席を次の人に回す
+        ExpireUnansweredPromotionOffers: 返事のない繰り上げ確認を期限で打ち切る
       qrys:
         WaitlistHead: キャンセル待ちの先頭一件
         LiveRegistrationsOfMeetup: そのミートアップの生きている申込一覧
         MeetupCapacityStatus: 定員に対する申込状況
+        PromotionOffersPastReplyDeadline: 返事の期限を過ぎた繰り上げ確認の一覧
     up:
       - ctx: meetup-hosting
         rel: Customer-Supplier
@@ -922,13 +967,62 @@ decisions:
       - VenueBooking
       - ExpireVenueHoldsPastDeadline
       - venue-booking
+  - id: D12
+    topic: 定員を厳密な上限として守るか
+    chosen: capacity-as-target
+    options:
+      - name: capacity-as-target
+        label: 定員は目安とし、同時申込による 1〜2 人の超過は許容する
+        adopted: true
+        why: '主催者の回答: 残り 1 席に 2 人が同時に申し込んだら 2 人とも確定でよい。定員は会場の収容人数より少なめにしているので問題にならない。'
+      - name: capacity-as-hard-limit
+        label: 定員は絶対に超えない
+        why_not: 同時の申込を 1 件ずつ順番に裁く仕組み（ミートアップ単位の席台帳など）が要る。超過しても会場に入れるなら、その複雑さに見合わない。
+    affects:
+      - Registration
+      - Meetup
+      - registration
+    note: D7（超えない責任は参加申込側）の「超えない」を「目安として守る」に緩める。二重申込は従来どおりその場で断る。
+  - id: D13
+    topic: 中止が決まったあとに届いた申込をどう扱うか
+    chosen: reject-after-cancellation
+    options:
+      - name: reject-after-cancellation
+        label: 受け付けずに断る
+        adopted: true
+        why: '主催者の回答: 受け付けずに断る。募集中でないミートアップへの申込は MeetupNotOpenForApplication で弾く、という既存の形のままでよい。'
+      - name: keep-as-interest
+        label: 申込としては無効にしつつ、次回の案内先として記録する
+        why_not: 中止された回の申込に別の意味を持たせることになり、申込の状態が増える。次回の案内は別の仕組みで扱える。
+    affects:
+      - Registration
+      - Meetup
+      - registration
+  - id: D14
+    topic: 繰り上がった参加者に承諾を求めるか
+    chosen: confirm-only-near-deadline
+    options:
+      - name: confirm-only-near-deadline
+        label: 取消締切が近いときだけ承諾を求める
+        adopted: true
+        why: '主催者の回答: 直前だけ確認を取る。ふだんは自動で確定にして席を早く埋め、締切間際だけ本人の予定を確かめる。返事がなければ次の人に回す。'
+      - name: always-auto-confirm
+        label: いつでも自動で確定にする
+        why_not: 締切間際だと、もう行けなくなっていた人が席を持ったまま欠席するおそれがある。
+      - name: always-ask
+        label: いつでも承諾を求める
+        why_not: 返事を待つあいだ席が埋まらず、余裕のある時期まで遅くなる。
+    affects:
+      - Registration
+      - PromoteNextWhenOfferReleased
+      - ExpireUnansweredPromotionOffers
+      - registration
 policies:
   - name: PromoteWaitlistOnCancellation
     ctx: registration
     trg: RegistrationCancelled
     qry: WaitlistHead
     cmd: PromoteWaitlistedRegistration
-    evt: RegistrationPromoted
     agg: Registration
     within: 即時
     note: 繰り上げが働くのは取消締切までの取消に対してだけ（D8）。中止に伴う一括無効化は RegistrationRevoked という別のイベントにしてあるので、この繰り上げは連鎖しない（D5）。
@@ -1041,6 +1135,27 @@ policies:
     agg: VenueBooking
     within: 期限当日中
     note: '時刻駆動。きっかけになるイベントは無く、仮押さえ期限の到来で動く（Q2 の回答: 期限が来たら自動で失効）。主催者の操作は要らない。'
+  - name: ExpireUnansweredPromotionOffers
+    ctx: registration
+    qry: PromotionOffersPastReplyDeadline
+    bulk: true
+    cmd: ExpirePromotionOffer
+    evt: PromotionOfferExpired
+    agg: Registration
+    within: 返事の期限の到来時
+    note: 時刻駆動。きっかけになるイベントは無く、返事の期限の到来で動く。
+  - name: PromoteNextWhenOfferReleased
+    ctx: registration
+    trgs:
+      evts:
+        - PromotionDeclined
+        - PromotionOfferExpired
+      mode: any
+    qry: WaitlistHead
+    cmd: PromoteWaitlistedRegistration
+    agg: Registration
+    within: 即時
+    note: 辞退や時間切れで空いた席を、次の順番待ちの人に回す。取消締切を過ぎていれば繰り上げは起きない（D8）。
 domains:
   - name: meetup-operation
     vision: 主催者が、開催するかどうかを迷わず決められ、当日までの席のさばきと出欠の記録に手間を取られない状態をつくる。
@@ -1259,15 +1374,17 @@ aggregates:
     background: "ミートアップは席が有限で、しかも直前まで人が入れ替わる。主催者が手作業で名簿を書き換えると、\n誰が繰り上がったのか本人にも主催者にも分からなくなり、当日「来たのに席がない」「来ると思った人が来ない」が起きる。\n申し込んだ順を機械的に守り、空きが出たら自動で埋めることが、参加者にとっての公平さそのものになる。\n"
     constraints:
       - 同じ参加者は同じミートアップに、生きた申込を二件以上持てない
-      - 確定済み申込の件数はミートアップの定員を超えてはならない
+      - 確定済み申込の件数はミートアップの定員を目安として守る。同時の申込による 1〜2 人の超過は許容する（定員は会場の収容人数より少なめに設定する）
       - キャンセル待ちの順番は申し込んだ時刻の順で、後から入れ替えない
       - 取消できるのはミートアップの取消締切まで
       - 繰り上げが起きるのは取消締切までの取消に対してだけ
+      - 取消締切が近い繰り上げは、本人の承諾があって初めて確定になる。返事がなければ席は次の人に回る
     states:
       - CONFIRMED
       - WAITLISTED
       - CANCELLED
       - REVOKED
+      - PROMOTION_OFFERED
     transitions:
       - from: NONE
         to: CONFIRMED
@@ -1298,6 +1415,27 @@ aggregates:
         to: REVOKED
         via: RevokeRegistration
         when: ミートアップが中止されたとき
+      - from: WAITLISTED
+        to: PROMOTION_OFFERED
+        via: PromoteWaitlistedRegistration
+        when: 空席が生まれたが取消締切が近く、本人の承諾を待つとき
+      - from: PROMOTION_OFFERED
+        to: CONFIRMED
+        via: AcceptPromotion
+        when: 本人が返事の期限までに「参加します」と答えたとき
+      - from: PROMOTION_OFFERED
+        to: CANCELLED
+        via: DeclinePromotion
+        when: 本人が繰り上げを辞退したとき
+      - from: PROMOTION_OFFERED
+        to: CANCELLED
+        via: ExpirePromotionOffer
+        when: 返事がないまま返事の期限を過ぎたとき
+        note: 仮置き。返事がなかった人を順番待ちに残すかどうかは確認中（Q3）。
+      - from: PROMOTION_OFFERED
+        to: REVOKED
+        via: RevokeRegistration
+        when: ミートアップが中止されたとき
     attrs:
       - name: registrationId
         type: RegistrationId
@@ -1323,6 +1461,10 @@ aggregates:
         type: datetime
         required: false
         note: 繰り上がった参加者に「いつ席が回ってきたか」を示す
+      - name: promotionReplyDeadline
+        type: datetime
+        required: false
+        note: PROMOTION_OFFERED のときだけ意味を持つ。これを過ぎたら席を次の人に回す
     events:
       - name: RegistrationConfirmed
         params:
@@ -1396,7 +1538,43 @@ aggregates:
           - name: reason
             type: CancellationReason
             required: true
-    note: 「確定済み件数が定員を超えない」「同じ参加者の生きた申込は一件だけ」は、いずれもミートアップ単位で申込をまとめて見ないと判定できず、申込一件の中では守れない。担保方式は未決（Q4）。定員という数字は Meetup から供給される（D7）。
+      - name: PromotionOffered
+        params:
+          - name: registrationId
+            type: RegistrationId
+            required: true
+          - name: meetupId
+            type: MeetupId
+            required: true
+          - name: memberId
+            type: MemberId
+            required: true
+          - name: replyDeadline
+            type: datetime
+            required: true
+      - name: PromotionDeclined
+        params:
+          - name: registrationId
+            type: RegistrationId
+            required: true
+          - name: meetupId
+            type: MeetupId
+            required: true
+          - name: memberId
+            type: MemberId
+            required: true
+      - name: PromotionOfferExpired
+        params:
+          - name: registrationId
+            type: RegistrationId
+            required: true
+          - name: meetupId
+            type: MeetupId
+            required: true
+          - name: memberId
+            type: MemberId
+            required: true
+    note: 「同じ参加者の生きた申込は一件だけ」はミートアップ単位で申込をまとめて見ないと判定できず、申込一件の中では守れない。定員は厳密な上限ではなく目安として扱う（D12）ので、席台帳のような仕組みは要らない。定員という数字は Meetup から供給される（D7）。
     terminalStates:
       - CANCELLED
       - REVOKED
@@ -1785,6 +1963,14 @@ queries:
       - VenueBooking
     formula: 状態が HELD かつ 仮押さえ期限 < 現在時刻
     note: 一括処理向けの BULK クエリ
+  - name: PromotionOffersPastReplyDeadline
+    ctx: registration
+    purpose: 返事の期限を過ぎたのに承諾も辞退もされていない繰り上げ確認の一覧。時間切れにして席を次の人に回す対象を決める。
+    users: 繰り上げ確認の時間切れポリシー
+    sources:
+      - Registration
+    formula: 状態が PROMOTION_OFFERED かつ 返事の期限 < 現在時刻
+    note: 一括処理向けの BULK クエリ
 questions:
   - id: Q1
     topic: 募集締切と、開催するかどうかを決める締切は同じ日か別か
@@ -1802,12 +1988,13 @@ questions:
     topic: 直前に繰り上がった参加者へ承諾を求めるか
     why: 自動で確定にすると、行けなくなっていた人が確定席を持ったまま欠席し、席が二重に無駄になる。承諾を求めると空席が埋まるまで遅くなる。
     status: open
-    note: '回答（2026-11-27・Artifact の質問パネル）: 直前だけ確認を取る。「直前」は取消締切の少し前から。締切を過ぎたら繰り上げはしない（既存の rule「promotion must not happen after the cancellation deadline」と一致）。残り: 承諾の返事がないまま締切を過ぎた席の扱いを確認中。決まったら承諾待ちの状態と承諾・辞退・時間切れの分岐を Registration に追加する。'
+    note: '回答（2026-11-27・Artifact の質問パネル）: 取消締切が近いときだけ承諾を求める。返事がなければ席は次の人に回す（D14）。承諾待ちの状態と承諾・辞退・時間切れの分岐を追加済み。残り: (1) 返事がなかった人を順番待ちに残すか（いまは取消扱いで仮置き）(2)「近い」の境目と返事の期限の長さ。'
   - id: Q4
     topic: ミートアップ単位でしか守れない制約（定員超過・二重申込・押さえの一意性）を、実装でどう担保するか
     why: 参加申込も会場予約も一件ぶんの粒度で設計したため、件数や一意性という「まとめて見ないと分からない制約」は集約の中では守れない。楽観ロックか、ミートアップ単位の席台帳か、方式の選択が要る。
-    status: open
-    note: '回答（2026-11-27・Artifact の質問パネル）: (1) 二重申込は 2 回目をその場で断る — 既存の err DuplicateRegistration と一致、変更なし。(2) 残り 1 席への同時申込は「2 人とも確定でよい」— 既存の rule「confirmed registrations must never exceed the meetup capacity」と D7 に食い違う。定員を厳密に守らなくてよいなら、ミートアップ単位の席台帳は不要になり楽観的な方式で足りる。会場の収容人数まで超える場合の扱いを確認中で、答えが出るまで rule と D7 は変更していない。'
+    status: closed
+    note: '回答（2026-11-27・Artifact の質問パネル）: 定員は収容人数より少なめにしているので、同時申込による 1〜2 人の超過は許容する。定員を目安として扱うと決めた（D12）ので、席台帳は不要。二重申込は 2 回目をその場で断る（既存の DuplicateRegistration のまま）。押さえの一意性は会場予約側の rule のまま。'
+    decision_id: D12
   - id: Q5
     topic: 受付を開始したあとに開催確定のミートアップを中止すると、受付名簿が開いたままになる。中止時に受付を閉じる仕組みが要るか
     why: モデル検査（invariants の NoOpenCheckInOnCancelledMeetup）が、開催確定→会場本予約→受付開始→中止（Meetup は CONFIRMED→CANCELLED）の順で、Meetup が CANCELLED なのに AttendanceSheet が OPEN の状態を見つけた。中止を受けて受付名簿を閉じる POLICY も遷移も今は無い。やむを得ない中止（会場が使えなくなる等）は受付開始後にも起こりうる。
@@ -1817,8 +2004,9 @@ questions:
   - id: Q6
     topic: 中止後の申込を、状態機械の外（scenario のガード）だけで防いでよいか
     why: モデル検査（invariants の CancelledMeetupRevokesRegistrations）が、Meetup が CANCELLED になったあとに ApplyForMeetup が通って Registration が CONFIRMED のまま残る状態を見つけた。RevokeRegistrationsOnMeetupCancelled は中止の時点で既にある申込にだけ効く。中止後の申込を弾く条件は scenario の rules にあるかもしれないが、検査モデルはそれを読めないため、本当のモデル漏れか検査の限界かは未判定。
-    status: open
+    status: closed
     note: "検証の限界だった。ガードは scenario の errs（MeetupNotOpenForApplication＝ミートアップが募集中でない）に自然文で書かれていた。検査モデルは自然文を読めないため、scenario に requires（Meetup が PUBLISHED）として形式化したところ、違反は出なくなった。設計上の問いとして残すかは別途判断。"
+    decision_id: D13
 actions:
   - id: A1
     text: 募集締切と開催可否を決める締切が同じか別かを主催者に確認する（Q1）。別なら Meetup に締切を2つ持たせる。
