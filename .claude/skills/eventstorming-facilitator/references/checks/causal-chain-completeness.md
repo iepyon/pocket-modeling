@@ -35,8 +35,7 @@ view 出力の読み方（brs 分岐対応版）:
 評価観点:
 1. **アクター起点の CMD** から始まり、**POLICY による非同期遷移** で別 BC へ流れ、最終 EVT で終端しているか
 2. **連続する step の間に説明されない飛躍** がないか（例: 検品完了 → いきなり配送完了。承認 / 査定確定 / 出荷指示 がスキップされている等）
-3. **POLICY の trg** が直前ステップの evt と整合しているか
-4. **業務上の「分岐」が落ちていないか**（rejected/timeout/suspicious 等の代替フローが必要なポイントが抜けていないか）。
+3. **業務上の「分岐」が落ちていないか**（rejected/timeout/suspicious 等の代替フローが必要なポイントが抜けていないか）。
    ただし missing_branches の判定は、**必ず各 step の branches[] と flow の sidetracks[] を突合してから**
    行うこと（分岐は steps の線形列には現れず branches/sidetracks 側にモデル済みのことが多い。
    モデル済みの分岐を「無い」と報告しない）
@@ -72,4 +71,4 @@ view 出力の読み方（brs 分岐対応版）:
 ## 連携する構造チェック
 
 - `flow_chain_resolution` — unresolved entry/next/terminal を先に修正
-- `unknown_evt_in_policy` — POLICY のトリガー整合を先に修正
+- `unknown_evt_in_policy` — POLICY のトリガー整合（trg が実在 EVT か）を先に修正。view は trg 一致で POLICY を挿入するため、step 間の trg 整合は LLM では見ない
