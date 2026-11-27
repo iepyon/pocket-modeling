@@ -1,0 +1,82 @@
+# ⚠ This file is managed by dmlctl (.claude/skills/eventstorming-facilitator/scripts/dmlctl.py).
+# AI agents must use `dmlctl view/init/set/add/remove/update` and MUST NOT edit this file directly
+# (PreToolUse hook blocks direct Read/Edit/Write). Humans may edit outside Claude Code.
+
+# =============================================================================
+# DML テンプレート — 新規 EventStorming セッション
+# =============================================================================
+# `dmlctl init <file> --session-id=... --domain=...` がこのテンプレートから
+# session 入りの空 DML を生成する。以降は dmlctl set/add/update で育てる。
+#
+# 全フィールドは optional。空 YAML（{} のみ）でも valid（進行中セッション許容）。
+# HTML（dist/eventstorming/*.html）は本 YAML のみから自動生成される。
+#
+# 各フィールドの書き方の正典：
+#   - 型・必須・enum      → references/dml.schema.yaml（書く前に `dmlctl hint --path=<a.b.c>`）
+#   - 設計判断・モデリングルール → references/ddd-playbook.md（DDD 概念軸の正典）
+#   - 記入済みのフル例    → examples/sample.dml.yaml
+# =============================================================================
+#
+# トップレベルフィールド一覧（記入順の目安 = フェーズ進行順）：
+#
+#   session:      # セッションメタ（id / domain / phase / status / goal / started_at）
+#                 # phase の前進は `dmlctl advance` を使う（enum 検証つき）
+#
+#   narratives:   # 散文＋フロー起点。kind: happy は 1 本（400〜600 字）、
+#                 # kind: alt は複数可（100〜200 字）。entry 指定で §2 フロー図を駆動
+#
+#   domains:      # サブドメイン分類（subs[].type: CORE/SUPPORTING/GENERIC_SUBDOMAIN）
+#
+#   contexts:     # BC 宣言。name / description（散文）/ lang（英→日辞書：
+#                 # aggs/actors/cmds/evts/pols/qrys/vos）/ up / dn / aggs（AGG 名簿）
+#
+#   aggregates:   # AGG 詳細。name / ctx / purpose / background / constraints /
+#                 # states / transitions / attrs / events
+#                 # 生成 CMD は transitions に書かない（ddd-playbook §8「transitions[] の初期化規約」）
+#
+#   scenarios:    # CMD 実行ユースケース。name（日本語・アクター＋行為）/ ctx / actor /
+#                 # cmd / evt|brs / agg / rules / errs / next（フロー連鎖）
+#
+#   policies:     # EVENTUAL-TX 専用。trg（単一）or trgs（join/OR）/ cmd / evt /
+#                 # bulk（true なら qry 必須）/ within（遅延許容 SLA）
+#
+#   decisions:    # 意思決定ログ。topic / chosen / options[]（name/label/why/why_not）/ affects
+#
+#   questions:    # オープンクエスチョン（status: open|closed、closed は decision_id 必須）
+#   actions:      # 次のアクション（done フラグで進捗管理。`dmlctl action` で更新）
+#   queries:      # リードモデル候補（name / ctx / purpose / users / sources / formula)
+#
+# aggregates / policies / scenarios を足したら、所属 BC の contexts[].lang にも
+# 英→日ラベルを同時登録する（漏れは language_coverage チェックが検出）。
+# =============================================================================
+session:
+  id: eventstorming-20261127-2329
+  domain: 在庫管理
+  phase: '2'
+  status: 'フェーズ2: ストーリー確認中（ハッピーパスと代替 2 本を下書き。返品できない場合の流れを確認中）'
+  started_at: 2026-11-27T23:29
+  html_link: ../../dist/eventstorming/eventstorming-20261127-2329.html
+  goal: 小売店舗で在庫を抱えすぎる（売れ残り・期限切れ）原因を、発注から商品が店を出ていくまでの流れの中で明らかにする
+questions:
+  - id: Q1
+    topic: 小売店舗での「出荷」は何を指すか
+    why: スコープは「発注から出荷まで」と決まったが、店舗では商品の出口が店頭販売・他店への移動・仕入先への返品・廃棄と複数ある。どこを終点にするかで、扱う出来事の範囲が変わる。
+    status: open
+    note: '仮置き: 商品が店を出ていくことすべて（販売・移動・返品・廃棄）を終点として扱う。'
+  - id: Q2
+    topic: 売れ残りに気づくのが「期限や季節の終わりが近づいたとき」では遅すぎないか
+    why: 気づくきっかけが期限間際だと、返品できる期限を過ぎていたり、値下げしても売り切れなかったりする。もっと早く気づく手段（売れ行きの数字など）が無いこと自体が、抱えすぎの原因かもしれない。
+    status: open
+narratives:
+  - id: happy
+    kind: happy
+    title: ハッピーパス — 発注から売り切りまで
+    prose: "店長や売場の担当者は、売場とバックヤードを見て回り、これまでの経験から「この商品はこのくらい要る」と数を決めて仕入先に発注する。\n数日後、商品が店に届く。担当者は届いた商品を受け取り、数を確かめてバックヤードに置く。\n\n売場の棚が減ってきたら、バックヤードから商品を出して並べる。お客さんが買っていくたびに在庫は減り、\n賞味期限や季節の終わりが来る前に、仕入れた分をほぼ売り切る。\n\n棚が空きそうになったら、店長や担当者はまた売場を見て、次の発注の数を決める。\n"
+  - id: alt-return-to-supplier
+    kind: alt
+    title: 代替シナリオ — 売れ残りに気づいて仕入先へ返品する
+    prose: "経験で決めた数が多すぎて、商品が思ったほど売れない。賞味期限や季節の終わりが近づいて初めて、担当者は売れ残りそうだと気づく。\nまず仕入先に返品を申し出て、受け付けてもらえた分を送り返す。\n"
+  - id: alt-return-refused
+    kind: alt
+    title: 代替シナリオ — 返品できずに店に残る
+    prose: "売れ残りに気づいて返品を申し出たが、仕入先に受け付けてもらえない。商品は店に残り、別の出口を探すことになる。\nどんな場合に返品できないのか、残った商品が最後にどうなるのかは確認中。\n"
