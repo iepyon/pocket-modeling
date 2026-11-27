@@ -29,7 +29,7 @@ EventStorming／DDD のドメインモデリングと、Kimball 流ディメン�
 | DimML（真実源） | `docs/dimensional/<session>.dimml.yaml` | ディメンショナル・モデルのソース |
 | HTML（派生物） | `dist/dimensional/<session>.html` | バスマトリクス＋スタースキーマ。手編集しない |
 
-EventStorming のセッションは `eventstorming-YYYYMMDD-HHMM` 形式で保存する。
+セッションは EventStorming が `eventstorming-YYYYMMDD-HHMM`、ディメンショナルが `dimensional-YYYYMMDD-HHMM` 形式で保存する。
 
 ## パイプライン
 
@@ -105,7 +105,7 @@ open dist/eventstorming/*.html   # または任意のブラウザで開く
 
 ### 使い始める
 
-Claude Code に話しかけるだけ。「イベントストーミングやろう」「スタースキーマを設計したい」などでスキルが起動する。新規 DML は `dmlctl init`、新規 DimML は skill の example を参考に AI が作成する。Artifact ツールが使えるセッションでは、HTML を Artifact として公開し、質問パネルに 1 問ずつ出して回答を DML に反映するグリル運用ができる（`eventstorming_build.py <dml> --artifact`、詳細は SKILL.md「Artifact 上のグリル」。ディメンショナル側は未対応）。
+Claude Code に話しかけるだけ。「イベントストーミングやろう」「スタースキーマを設計したい」などでスキルが起動する。新規 DML は `dmlctl init`、新規 DimML は `references/template.dimml.yaml` をコピーして `session` を埋めて作る（完成例は `examples/retail-sales.dimml.yaml`）。Artifact ツールが使えるセッションでは、HTML を Artifact として公開し、質問パネルに 1 問ずつ出して回答を DML に反映するグリル運用ができる（`eventstorming_build.py <dml> --artifact`、詳細は SKILL.md「Artifact 上のグリル」。ディメンショナル側は未対応）。
 
 ## よく使うコマンド
 
