@@ -2082,23 +2082,40 @@ def build(
     return out_path
 
 
-def strip_for_artifact(html: str) -> str:
-    """Claude Artifact 互換に整形する。
+GRILL_PANEL_PATH = SKILL_ROOT / "templates" / "grill-panel.html"
 
-    - `<meta http-equiv="refresh">` を除去（Artifact 内でのリロードを防ぐ）
-    - `.reload-note` の案内 div を除去（自動更新は Artifact では機能しない）
+
+def strip_for_artifact(html: str) -> str:
+    """Claude Artifact（Artifact ツールで公開するページ）向けに整形する。
+
+    - `<meta http-equiv="refresh">` と `.reload-note` を除去（再公開で自動リロードされる）
+    - `<!DOCTYPE>` / `<html>` / `<head>` / `<body>` の外枠と charset meta を除去
+      （公開時に Artifact 側のスケルトンで包まれるため、中身だけを渡す）
+    - Mermaid の CDN 読み込みと初期化を除去（Artifact は `<pre class="mermaid">` を自前で描画する）
+    - ページ上部（進捗バーの直前）にグリル質問パネル `templates/grill-panel.html` を差し込む
     """
+    html = re.sub(r'[ \t]*<meta http-equiv="refresh"[^>]*>\s*\n', "", html)
+    html = re.sub(r'[ \t]*<div class="reload-note">.*?</div>\s*\n', "", html)
     html = re.sub(
-        r'[ \t]*<meta http-equiv="refresh"[^>]*>\s*\n',
+        r"[ \t]*<!-- Mermaid:.*?-->\s*<script src=\"[^\"]*mermaid[^\"]*\"></script>\s*"
+        r"<script>.*?</script>\s*\n",
         "",
         html,
+        count=1,
+        flags=re.DOTALL,
     )
-    html = re.sub(
-        r'[ \t]*<div class="reload-note">.*?</div>\s*\n',
-        "",
-        html,
-    )
-    return html
+    html = re.sub(r"<!DOCTYPE html>\s*", "", html, count=1)
+    html = re.sub(r"</?(?:html|head|body)(?:\s[^>]*)?>\s*\n?", "", html)
+    html = re.sub(r'[ \t]*<meta charset="[^"]*">\s*\n', "", html, count=1)
+
+    panel = GRILL_PANEL_PATH.read_text(encoding="utf-8")
+    marker = '<div class="progress">'
+    if marker in html:
+        # 置換文字列にバックスラッシュが含まれても壊れないよう str.replace を使う
+        html = html.replace(marker, panel + "\n  " + marker, 1)
+    else:
+        html = panel + "\n" + html
+    return html.lstrip()
 
 
 def copy_to_clipboard(path: Path) -> bool:
@@ -2165,7 +2182,7 @@ def main() -> int:
     parser.add_argument(
         "--artifact",
         action="store_true",
-        help="Claude Artifact 互換 HTML を生成（meta-refresh 除去 / <session>-artifact.html）",
+        help="Claude Artifact 用 HTML を生成（外枠除去＋上部にグリル質問パネル / <session>-artifact.html）",
     )
     parser.add_argument(
         "--copy",

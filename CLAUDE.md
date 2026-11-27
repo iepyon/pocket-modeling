@@ -34,6 +34,7 @@ python3 .claude/skills/dimensional-modeling-facilitator/scripts/dimml_build.py -
 - **DML への I/O は `scripts/dmlctl.py` 経由のみ**。`docs/eventstorming/*.dml.yaml` への `Read`/`Edit`/`Write` は **PreToolUse フック（`scripts/hooks/block_direct_dml.py`）が技術的にブロック**する（exit 2、stderr で dmlctl 代替コマンドを案内）。新規作成は `dmlctl init`、参照は `dmlctl view`、編集は `dmlctl set/add/remove/update`。手動編集が必要な場合は Claude Code の外のエディタを使う
 - **dmlctl 経由の書き込みは build + validate を自動実行**（PreToolUse で Write/Edit がブロックされるため PostToolUse hook が走らない代わり、dmlctl 自身が後処理を回す）。テストで抑止するときは `--no-postprocess`
 - **PostToolUse hook** は安全網として残置（直接 Write/Edit が万一すり抜けた場合の build + validate）。通常は dmlctl 経由なので発火しない
+- **Artifact ツールがあるセッションでは HTML を Artifact として公開する**（`eventstorming_build.py <dml> --artifact` → `dist/eventstorming/<session>-artifact.html`）。ページ上部の質問パネルに 1 問ずつ出し、回答が届いたら DML 更新 → 再公開 → 次の質問。手順・db の形・守ることは SKILL.md「Artifact 上のグリル」。ディメンショナル側は未対応
 - AI は HTML を直接編集しない。チャットに DML 全文を流さない（フェーズ完了テンプレで抜粋のみ）
 
 ## YAML キーの命名規約
