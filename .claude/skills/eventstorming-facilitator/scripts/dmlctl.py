@@ -867,10 +867,12 @@ def cmd_check(args) -> int:
         clean: list[str] = []
         results = []
         total = 0
+        errors = 0
         for name, fn in CHECKS.items():
             findings = fn(model)
             if findings:
                 total += len(findings)
+                errors += sum(1 for f in findings if f.severity == "error")
                 results.append({
                     "check": name,
                     "count": len(findings),
@@ -883,6 +885,8 @@ def cmd_check(args) -> int:
             "checks_run": len(CHECKS),
             "checks_with_findings": len(results),
             "total_findings": total,
+            "total_errors": errors,
+            "total_warnings": total - errors,
             "clean": clean,
             "results": results,
         }
@@ -891,17 +895,19 @@ def cmd_check(args) -> int:
                 sys.stdout.write(f"✅ clean — {len(CHECKS)} 観点すべて違反なし\n")
             else:
                 sys.stdout.write(
-                    f"⚠ {len(results)}/{len(CHECKS)} 観点で計 {total} 件の違反\n"
+                    f"⚠ {len(results)}/{len(CHECKS)} 観点で計 {total} 件"
+                    f"（違反 {errors} 件・警告 {total - errors} 件）\n"
                 )
                 for r in results:
                     sys.stdout.write(f"\n■ {r['check']}（{r['count']} 件）\n")
                     for f in r["findings"]:
-                        sys.stdout.write(f"  - {f.get('message', '')}\n")
+                        tag = "[warn] " if f.get("severity") == "warn" else ""
+                        sys.stdout.write(f"  - {tag}{f.get('message', '')}\n")
                 sys.stdout.write(f"\nclean: {len(clean)} 観点\n")
         else:
             sys.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2))
             sys.stdout.write("\n")
-        return 0 if total == 0 else 1
+        return 0 if errors == 0 else 1
 
     if args.check not in CHECKS:
         print(f"❌ 未知の check: {args.check}\n   利用可能: {', '.join(CHECKS)}", file=sys.stderr)
@@ -914,7 +920,8 @@ def cmd_check(args) -> int:
     }
     sys.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2))
     sys.stdout.write("\n")
-    return 0 if not findings else 1
+    # severity=warn のみなら終了コードに影響させない
+    return 1 if any(f.severity == "error" for f in findings) else 0
 
 
 # ============================================================

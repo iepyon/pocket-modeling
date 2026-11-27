@@ -253,6 +253,7 @@ DML（Domain Modeling Language）に関するルールは 3 つの真実源に�
   | `background` | 「なぜ今この AGG を切り出すか・既存運用の何が痛いか」（1〜3 文・WHY） |
   | `constraints[]` | 業務／法令／プラットフォーム由来の制約（技術スタック制約に偏らせない） |
   | `states` / `transitions[]` | 状態名（UPPER_SNAKE）と遷移。`via` は scenarios[].cmd と突合 |
+  | `terminalStates[]` | 終端状態（出る遷移を持たない states の宣言・任意）。`state_dead_end` の除外に使う |
   | `attrs[]` | ペイロード属性（`name`/`type`/`required`/`note`）。HTML §7 で属性表 |
   | `events[]` | emit する EVT 宣言（`params[]` は `attrs[]` と同構造）。HTML §7 でペイロード表 |
 
@@ -425,7 +426,7 @@ DML（Domain Modeling Language）に関するルールは 3 つの真実源に�
 | レイヤ | 担保するもの | 例 |
 |------|------|------|
 | **JSON Schema**（機械・決定論的） | 構文 validity。型・必須・enum・命名 pattern・排他制約・未知フィールド禁止（全量は [`dml.schema.yaml`](./dml.schema.yaml)） | `cmd` が PascalCase か、`bulk:true` に `qry` があるか |
-| **構造チェック**（Python・LLM 不要） | 参照実在・命名・到達可能性（19 観点は [`quality-check.md`](./quality-check.md)、実体は [`checks.py`](../scripts/dml_filters/checks.py)） | `trg` が実在 EVT を指すか、`scenarios[].cmd` ↔ `transitions[].via` |
+| **構造チェック**（Python・LLM 不要） | 参照実在・命名・到達可能性（25 観点は [`quality-check.md`](./quality-check.md)、実体は [`checks.py`](../scripts/dml_filters/checks.py)） | `trg` が実在 EVT を指すか、`scenarios[].cmd` ↔ `transitions[].via` |
 | **意味チェック**（観点別 LLM） | 因果整合・モデル品質（6 観点は [`checks/*.md`](./checks/)） | 分岐の MECE 性、業務語彙の適切さ、Saga 完結性 |
 
 **スキーマ通過は必要条件であって十分条件ではない。** ビルダー（`eventstorming_build.py`）は読込時に schema 検証し HTML §9 にバナー（✅ / ⚠ 違反一覧）を描画する。検証は**非ブロッキング**（違反があっても HTML は生成される）。全行コメントのみ（YAML→`None`）や空ファイルは「未記述」として検証対象外（進行中セッション許容）。

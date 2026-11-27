@@ -23,6 +23,8 @@ view 出力の読み方（brs 分岐対応版）:
 
 補助的に、`dmlctl view --view=policies` も評価対象に追加すると POL チェーンの全貌が見える。
 
+機械的に判定できる部分（`policy_cycle`・`policy_agg_consistency`・`transition_state_integrity` など）は、先に `dmlctl check --all` で潰してからこの観点を回す。
+
 ## LLM へのプロンプト
 
 ```

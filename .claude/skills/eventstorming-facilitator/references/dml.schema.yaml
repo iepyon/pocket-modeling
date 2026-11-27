@@ -231,6 +231,9 @@ $defs:
       transitions:
         type: array
         items: { $ref: "#/$defs/transition" }
+      terminalStates:                           # 終端状態（出る遷移を持たなくてよい states の部分集合・任意）
+        type: array                             # state_dead_end の除外に使う
+        items: { $ref: "#/$defs/upperSnake" }
       attrs:
         type: array
         items: { $ref: "#/$defs/attribute" }
