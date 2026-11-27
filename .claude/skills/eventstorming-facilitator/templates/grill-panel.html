@@ -2,7 +2,7 @@
      グリル質問パネル（Artifact 版 HTML の上部に差し込まれる）
      - 質問:  db `grill/current`   … Claude が ArtifactData で書く（閲覧者は読むだけ）
      - 回答:  db `answers/<qid>--<uid>` … 閲覧者がこのパネルから書く
-     - 通知:  回答保存後、mcp「Claude Code Remote」send_message で Claude のセッションを起こす
+     - 通知:  回答保存後、comments.sendToClaude でこのページを見張っている Claude のセッションを起こす
      仕様は SKILL.md「Artifact 上のグリル」を参照。DML 由来の内容は一切含まない（固定スニペット）。
      ============================================================ -->
 <style>
@@ -100,7 +100,7 @@
   // ローカルで開いた HTML（claude.ai の外）ではパネルごと出さない
   if (!window.claude || typeof window.claude.use !== 'function') { root.hidden = true; return; }
 
-  var SERVER = 'Claude Code Remote';
+  var THREAD_KEY = 'grill-thread';
   var body = document.getElementById('grill-body');
   var phaseEl = document.getElementById('grill-phase');
   var foot = document.getElementById('grill-foot');
@@ -263,24 +263,21 @@
     if (e) { e.textContent = msg; e.hidden = !msg; }
   }
 
+  var CHAT = 'Claude のチャットで「回答した」と送ると反映されます。';
   var NOTIFY_MSG = {
-    none: 'この画面からは Claude に自動で知らせられません。Claude のチャットで「回答した」と送ると反映されます。',
-    consent: 'Claude への通知が許可されていません。「Claude に知らせる」を押して許可するか、チャットで「回答した」と送ってください。',
-    connector: '「Claude Code Remote」コネクタにつながりません。claude.ai の 設定 → コネクタ を確認するか、チャットで「回答した」と送ってください。',
-    policy: '組織の設定で、この画面から Claude に知らせることができません。進行役の方に「回答した」と伝えてください。',
-    unreachable: 'Claude のセッションに届きませんでした（セッションが終了しているか、あなたのアカウントからは届けられません）。回答は保存済みなので、進行役の方が反映できます。',
-    retry: '一時的に Claude に知らせられませんでした。少し待って「Claude に知らせる」を押すか、チャットで「回答した」と送ってください。'
+    none: 'この画面からは Claude に自動で知らせられません。' + CHAT,
+    consent: 'このページがあなたの名前でコメントを送ることが、まだ許可されていません。「Claude に知らせる」を押して許可するか、' + CHAT,
+    editors: 'Claude に自動で知らせられるのは、このページの編集者だけです。回答は保存済みなので、進行役の方に「回答した」と伝えてください。',
+    session: 'いま回答を受け取れる Claude のセッションがありません。回答は保存済みです。' + CHAT,
+    retry: '一時的に Claude に知らせられませんでした。少し待って「Claude に知らせる」を押すか、' + CHAT
   };
   function notifyText(code) {
     switch (code) {
-      case 'no_mcp': case 'no_session': case 'not_granted': case 'capability_disabled': case 'capability_removed':
+      case 'no_comments': case 'off': case 'not_granted': case 'capability_disabled': case 'capability_removed':
         return NOTIFY_MSG.none;
-      case 'not_in_manifest': case 'approval_required': case 'consent_required':
-        return NOTIFY_MSG.consent;
-      case 'server_not_connected': case 'needs_reauth': case 'selection_required': case 'server_not_found':
-        return NOTIFY_MSG.connector;
-      case 'blocked_by_policy': return NOTIFY_MSG.policy;
-      case 'tool_error': return NOTIFY_MSG.unreachable;
+      case 'consent_required': return NOTIFY_MSG.consent;
+      case 'writers_only': case 'forbidden': return NOTIFY_MSG.editors;
+      case 'no_session': case 'claude_unavailable': return NOTIFY_MSG.session;
       default: return NOTIFY_MSG.retry;
     }
   }
@@ -398,21 +395,31 @@
     });
   }
 
+  // コメントのスレッドは 1 本を使い回す（回答のたびにスレッドを増やさない）
+  function savedThread() { try { return localStorage.getItem(THREAD_KEY) || ''; } catch (e) { return ''; } }
+  function saveThread(id) { try { id ? localStorage.setItem(THREAD_KEY, id) : localStorage.removeItem(THREAD_KEY); } catch (e) {} }
+
   function notifyClaude(q) {
     var qid = q.qid;
     if (S.notify[qid] === 'sending') return;
-    var sid = str(q.sessionId);
-    if (!sid) { S.notify[qid] = { code: 'no_session' }; render(); return; }
     S.notify[qid] = 'sending'; render();
-    window.claude.use('mcp').then(function (mcp) {
-      if (!mcp) throw { code: 'no_mcp' };
-      return mcp.callTool(SERVER, 'send_message', {
-        session_id: sid,
-        message: '【グリル回答】モデリング用アーティファクトに回答が届きました（qid=' + qid + '）。' +
-          'ファシリテータースキルの「Artifact 上のグリル」の手順どおり、ArtifactData で answers を読み、' +
-          'モデルに反映して再公開し、次の質問を出してください。'
+    var text = '【グリル回答】質問 ' + qid + ' に回答しました。回答を読んでモデルに反映し、次の質問を出してください。';
+    window.claude.use('comments').then(function (c) {
+      if (!c || typeof c.sendToClaude !== 'function') throw { code: 'no_comments' };
+      return c.canSendToClaude().then(function (can) {
+        if (can !== 'available') throw { code: typeof can === 'string' ? can : 'off' };
+        var tid = savedThread();
+        function fresh() {
+          return c.anchorFor(root).then(function (anchor) { return c.sendToClaude({ anchor: anchor, text: text }); });
+        }
+        if (!tid) return fresh();
+        return c.sendToClaude({ threadId: tid, text: text }).catch(function (e) {
+          if (e && (e.code === 'not_found' || e.code === 'invalid')) { saveThread(''); return fresh(); }
+          throw e;
+        });
       });
-    }).then(function () {
+    }).then(function (r) {
+      if (r && r.threadId) saveThread(r.threadId);
       S.notify[qid] = 'ok'; render();
     }, function (e) {
       S.notify[qid] = { code: (e && e.code) || 'upstream_error', detail: String((e && e.message) || '').slice(0, 200) }; render();

@@ -322,7 +322,7 @@ scenarios:
     cmd: ExpireVenueHold
     evt: VenueHoldExpired
     agg: VenueBooking
-    note: Q2 が未決のため仮置き。時刻での自動検知を前提にしている。主催者が気づいた時点で失効させる運用なら actor は Organizer になる。
+    note: 期限の到来で自動的に失効する（Q2 の回答で確定）。引き金は ExpireVenueHoldsPastDeadline ポリシー。
     rules:
       - rule: an expired hold must not be treated as a live hold
         why: 失効した押さえを生きているものとして扱うと、会場の無いミートアップの募集が続き、参加者が集まるほど傷が深くなる。
@@ -549,8 +549,10 @@ contexts:
       pols:
         BookVenueOnMeetupConfirmed: 開催確定に合わせて本予約に切り替える
         ReleaseVenueOnMeetupCancelled: 中止に合わせて会場を手放す
+        ExpireVenueHoldsPastDeadline: 期限が来た仮押さえを自動で失効させる
       qrys:
         VenueAvailability: 候補日ごとの会場の空き状況
+        VenueHoldsPastDeadline: 期限切れの仮押さえ一覧
     up: []
     dn:
       - ctx: meetup-hosting
@@ -891,6 +893,35 @@ decisions:
       - Meetup
       - CancelSheetOnMeetupCancelled
       - check-in
+  - id: D10
+    topic: 募集締切と開催可否を決める締切を分けるか
+    chosen: single-deadline
+    options:
+      - name: single-deadline
+        label: 締切は一本にする
+        adopted: true
+        why: '主催者の回答: 申込を締め切る日と開催するか決める日は同じ日。締切を一本にしておけば「締め切ったが開催未定」という状態を持たずに済む。'
+      - name: separate-deadlines
+        label: 募集締切と開催判断の締切を別に持つ
+        why_not: 実際の運用では同じ日に決めているため、使われない状態と締切が増えるだけになる。
+    affects:
+      - Meetup
+      - meetup-hosting
+  - id: D11
+    topic: 仮押さえの失効を誰が検知するか
+    chosen: auto-expire-on-deadline
+    options:
+      - name: auto-expire-on-deadline
+        label: 期限が来たら自動で失効させる
+        adopted: true
+        why: '主催者の回答: 期限が来たら自動で。主催者が気づくのを待つと、会場の無いまま募集が続く期間が生まれる。'
+      - name: organizer-marks-expired
+        label: 主催者が気づいた時点で失効扱いにする
+        why_not: 気づくまでの間、失効した押さえが生きているものとして扱われ、参加者が集まるほど影響が大きくなる。
+    affects:
+      - VenueBooking
+      - ExpireVenueHoldsPastDeadline
+      - venue-booking
 policies:
   - name: PromoteWaitlistOnCancellation
     ctx: registration
@@ -1001,6 +1032,15 @@ policies:
     agg: AttendanceSheet
     within: 即時
     note: 受付開始後に中止されても名簿が受付中のまま残らないようにする。受付の締切（CloseCheckIn）は使わない。締切にすると欠席の記録が走るため（D9）。
+  - name: ExpireVenueHoldsPastDeadline
+    ctx: venue-booking
+    qry: VenueHoldsPastDeadline
+    bulk: true
+    cmd: ExpireVenueHold
+    evt: VenueHoldExpired
+    agg: VenueBooking
+    within: 期限当日中
+    note: '時刻駆動。きっかけになるイベントは無く、仮押さえ期限の到来で動く（Q2 の回答: 期限が来たら自動で失効）。主催者の操作は要らない。'
 domains:
   - name: meetup-operation
     vision: 主催者が、開催するかどうかを迷わず決められ、当日までの席のさばきと出欠の記録に手間を取られない状態をつくる。
@@ -1737,16 +1777,27 @@ queries:
       - VenueBooking
     formula: 要対応の印 = 仮押さえ期限まで3日以内、または募集締切まで3日以内で最少催行人数に未達
     note: 3つの BC をまたぐ読み取り専用モデル
+  - name: VenueHoldsPastDeadline
+    ctx: venue-booking
+    purpose: 仮押さえ期限を過ぎたのに本予約になっていない押さえの一覧。自動失効の対象を決める。
+    users: 仮押さえ失効ポリシー
+    sources:
+      - VenueBooking
+    formula: 状態が HELD かつ 仮押さえ期限 < 現在時刻
+    note: 一括処理向けの BULK クエリ
 questions:
   - id: Q1
     topic: 募集締切と、開催するかどうかを決める締切は同じ日か別か
     why: 同じなら Meetup が持つ締切は1つでよいが、別なら「申込は締め切ったが開催可否はまだ」という状態が必要になり、公開中の意味が変わる。
     status: closed
     note: '回答（2026-11-27・Artifact の質問パネル）: 同じ日。募集締切と開催可否の判断は同時なので、applicationDeadline 一本のままでよい（「締め切ったが開催未定」の状態は設けない）。'
+    decision_id: D10
   - id: Q2
     topic: 仮押さえの失効を誰が検知するか
     why: ExpireVenueHold という遷移は置いたが、それを起こす引き金がモデルに無い。時刻で自動失効させるのか、主催者が気づいた時点で失効扱いにするのかで、必要な仕組みが変わる。
-    status: open
+    status: closed
+    note: '回答（2026-11-27・Artifact の質問パネル）: 期限が来たら自動で。時刻駆動の一括ポリシー ExpireVenueHoldsPastDeadline と、対象を引く VenueHoldsPastDeadline を追加した。'
+    decision_id: D11
   - id: Q3
     topic: 直前に繰り上がった参加者へ承諾を求めるか
     why: 自動で確定にすると、行けなくなっていた人が確定席を持ったまま欠席し、席が二重に無駄になる。承諾を求めると空席が埋まるまで遅くなる。
