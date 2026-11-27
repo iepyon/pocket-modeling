@@ -316,7 +316,7 @@
       step('', '3', '下の図に反映して、次の質問へ（自動で切り替わります）');
     }
     body.appendChild(steps);
-    if (n && n.code) body.appendChild(el('p', 'gr-msg gr-err', notifyText(n.code)));
+    if (n && n.code) body.appendChild(el('p', 'gr-msg gr-err', notifyText(n.code) + '（理由コード: ' + n.code + (n.detail ? ' / ' + n.detail : '') + '）'));
 
     var row = el('div', 'gr-row');
     if (n !== 'sending') {
@@ -415,7 +415,7 @@
     }).then(function () {
       S.notify[qid] = 'ok'; render();
     }, function (e) {
-      S.notify[qid] = { code: (e && e.code) || 'upstream_error' }; render();
+      S.notify[qid] = { code: (e && e.code) || 'upstream_error', detail: String((e && e.message) || '').slice(0, 200) }; render();
     });
   }
 
