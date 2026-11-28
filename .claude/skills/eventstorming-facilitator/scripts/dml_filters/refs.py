@@ -35,6 +35,12 @@ def _boundary_re(name: str) -> re.Pattern:
     return re.compile(r"(?<![A-Za-z0-9])" + re.escape(name) + r"(?![A-Za-z0-9])")
 
 
+def _qualified_re(name: str) -> re.Pattern:
+    """`<種別>.<識別子>` 形式の参照（decisions[].affects の `policies.NotifyX` など）。
+    fullmatch で使い、識別子部分が name と完全一致するものだけを参照とみなす。"""
+    return re.compile(r"([A-Za-z_]+)\." + re.escape(name))
+
+
 def _walk(node, path: str, visit: Callable[[str, Any, Any, str], None]) -> None:
     """ツリーを走査し、dict キーと文字列リーフごとに visit を呼ぶ。
 
@@ -90,6 +96,7 @@ def collect_refs(model: dict, name: str, *, ctx: str | None = None) -> dict:
     Returns: {"occurrences": [{"path", "kind"}], "mentions": [{"path", "excerpt"}]}
     """
     pattern = _boundary_re(name)
+    qualified = _qualified_re(name)
     occurrences: list[dict] = []
     mentions: list[dict] = []
 
@@ -101,6 +108,8 @@ def collect_refs(model: dict, name: str, *, ctx: str | None = None) -> dict:
         val = container[key]
         if val == name:
             occurrences.append({"path": path, "kind": kind})
+        elif isinstance(val, str) and qualified.fullmatch(val):
+            occurrences.append({"path": path, "kind": "qualified"})
         elif isinstance(val, str) and pattern.search(val):
             excerpt = val if len(val) <= _EXCERPT_LEN else val[:_EXCERPT_LEN] + "…"
             mentions.append({"path": path, "excerpt": excerpt.replace("\n", " ")})
@@ -137,8 +146,9 @@ def apply_rename(
         キー重複になる箇所。**衝突があると置換は一切行わない**（呼び出し側で中断する）。
     """
     pattern = _boundary_re(old)
+    qualified = _qualified_re(old)
     key_renames: list[tuple[Any, str]] = []   # (mapping, path)
-    value_sets: list[tuple[Any, Any, str]] = []  # (container, key_or_index, path)
+    value_sets: list[tuple[Any, Any, str, str]] = []  # (container, key_or_index, path, new_value)
     mentions: list[str] = []
     conflicts: list[str] = []
 
@@ -152,7 +162,9 @@ def apply_rename(
             return
         val = container[key]
         if val == old:
-            value_sets.append((container, key, path))
+            value_sets.append((container, key, path, new))
+        elif isinstance(val, str) and (m := qualified.fullmatch(val)):
+            value_sets.append((container, key, path, f"{m.group(1)}.{new}"))
         elif isinstance(val, str) and pattern.search(val):
             mentions.append(path)
 
@@ -166,7 +178,7 @@ def apply_rename(
     for mapping, path in key_renames:
         _rename_key(mapping, old, new)
         replaced.append(path)
-    for container, key, path in value_sets:
-        container[key] = new
+    for container, key, path, value in value_sets:
+        container[key] = value
         replaced.append(path)
     return replaced, mentions, []

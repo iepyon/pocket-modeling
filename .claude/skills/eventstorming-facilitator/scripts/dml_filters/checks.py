@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from .flow_walk import index_policies_by_trg
+from .flow_walk import index_policies_by_trg, pick_active_branch
 from .shared import INITIAL_STATE as INITIAL_PSEUDO_STATE
 from .shared import PHASES, policy_triggers, scenario_evts
 from .shared import to_list as _to_list
@@ -1601,6 +1601,114 @@ def alt_narrative_entry(model: dict) -> list[Finding]:
     return findings
 
 
+def _walk_flow(by_name: dict[str, dict], flow_id: str, entry: str) -> list[tuple[dict, dict | None, bool]]:
+    """ビルダー（build_flows_from_dml）と同じ規則で 1 本の流れをたどり、
+    `(scenario, その流れで選ばれた分岐, dict 形の next でこの流れ用のキーを使ったか)` を返す。"""
+    steps: list[tuple[dict, dict | None, bool]] = []
+    seen: set[str] = set()
+    current = entry
+    while current and current not in seen and current in by_name:
+        seen.add(current)
+        sc = by_name[current]
+        br = pick_active_branch(sc, flow_id)
+        nxt = sc.get("next")
+        keyed = isinstance(nxt, dict) and flow_id in nxt and not (br and br.get("next"))
+        steps.append((sc, br, keyed))
+        if br and br.get("terminal") == flow_id:
+            break
+        if br and br.get("next"):
+            current = br["next"]
+        elif isinstance(nxt, str):
+            current = nxt
+        elif isinstance(nxt, dict):
+            current = nxt.get(flow_id)
+        else:
+            current = None
+    return steps
+
+
+def alt_flow_takes_default_branch(model: dict) -> list[Finding]:
+    """代替の流れが、題名の分岐を一度も通らずメインの流れと同じ道をたどっているものを警告する。
+
+    代替の流れ（`kind: alt`）は、次のどれかでメインの流れから分かれているはず:
+      - entry がメインの流れ（`kind: happy` の entry からたどった道）に無いシナリオ
+      - 途中の分岐に、この流れの終わりの宣言（`brs[].terminal: <この流れの id>`）がある
+      - 途中の `next` が dict で、この流れの id のキーを持つ
+    どれも無いと、フロー図ではメインと同じ経路（既定の分岐）が描かれ、題名の出来事
+    （「条件つき承認」など）が図に出ない。構造チェックはこの食い違いを見ないので、ここで拾う。
+    メインの流れの entry が無い DML は比べる相手がないので対象外。"""
+    scenarios = [s for s in model.get("scenarios") or [] if isinstance(s, dict) and s.get("name")]
+    by_name = {s["name"]: s for s in scenarios}
+    narratives = [n for n in model.get("narratives") or [] if isinstance(n, dict)]
+    happy = next((n for n in narratives if n.get("kind") == "happy" and n.get("entry")), None)
+    if not happy or happy["entry"] not in by_name:
+        return []
+    happy_names = {sc["name"] for sc, _br, _k in _walk_flow(by_name, happy.get("id") or "happy", happy["entry"])}
+    findings: list[Finding] = []
+    for i, n in enumerate(model.get("narratives") or []):
+        if not isinstance(n, dict) or n.get("kind") != "alt" or not n.get("entry") or n["entry"] not in by_name:
+            continue
+        flow_id = n.get("id") or ""
+        steps = _walk_flow(by_name, flow_id, n["entry"])
+        diverges = (
+            n["entry"] not in happy_names
+            or any(br and br.get("terminal") == flow_id for _sc, br, _k in steps)
+            or any(keyed for _sc, _br, keyed in steps)
+        )
+        if diverges:
+            continue
+        branched = [sc["name"] for sc, br, _k in steps if sc.get("brs")]
+        findings.append(Finding(
+            kind="alt_flow_takes_default_branch",
+            severity="warn",
+            path=f"narratives[{i}]",
+            message=(
+                f"代替の流れ '{flow_id or n.get('title')}' が、メインの流れと同じ道（既定の分岐）だけをたどっています"
+                + (f"（通った分岐: {', '.join(branched)}）" if branched else "")
+                + "。entry を分岐の先のシナリオに置くか、分岐に terminal: " + (flow_id or "<id>")
+                + " を付けるか、next を dict にしてこの流れの行き先を書いてください"
+            ),
+            slice={"id": flow_id, "entry": n["entry"], "path": [sc["name"] for sc, _br, _k in steps]},
+        ))
+    return findings
+
+
+def rules_without_invariants(model: dict) -> list[Finding]:
+    """決まり（`rules`）を書いているのに、検査できる形（`invariants[]` / `requires`）が 1 件も無い DML を警告する。
+
+    `rules` は自然文で、構造チェックも Quint も読めない。集約が 2 つ以上あると、集約をまたぐ決まり
+    （「答え待ちの相談があるあいだは提出できない」など）が生まれやすいが、それを `rules` にだけ書くと
+    検査の対象が 0 件のまま「緑」になる。フェーズ 5 より前（session.phase < 5）は黙る。"""
+    session = model.get("session") if isinstance(model.get("session"), dict) else {}
+    phase = str(session.get("phase")) if session.get("phase") is not None else None
+    if phase not in PHASES or PHASES.index(phase) < PHASES.index("5"):
+        return []
+    aggs = [a for a in model.get("aggregates") or [] if isinstance(a, dict)]
+    if len(aggs) < 2:
+        return []
+    n_rules = sum(len(s.get("rules") or []) for s in model.get("scenarios") or [] if isinstance(s, dict))
+    if not n_rules:
+        return []
+    has_inv = bool(model.get("invariants"))
+    has_req = any(
+        isinstance(x, dict) and x.get("requires")
+        for sec in ("scenarios", "policies") for x in model.get(sec) or []
+    )
+    if has_inv or has_req:
+        return []
+    return [Finding(
+        kind="rules_without_invariants",
+        severity="warn",
+        path="invariants",
+        message=(
+            f"決まり（rules）が {n_rules} 件ありますが、invariants[] と requires が 0 件です。"
+            "集約をまたぐ状態の決まりは invariants[] と requires に書くと Quint で検査できます"
+            "（rules は自然文なので、どの検査も読みません）"
+        ),
+        slice={"rules": n_rules, "aggregates": len(aggs)},
+    )]
+
+
 def unreachable_scenario(model: dict) -> list[Finding]:
     """どの narrative の entry からも辿れないシナリオを警告する。
 
@@ -1812,6 +1920,8 @@ CHECKS: dict[str, Callable[[dict], list[Finding]]] = {
     "invariant_refs": invariant_refs,
     "undeclared_ctx": undeclared_ctx,
     "alt_narrative_entry": alt_narrative_entry,
+    "alt_flow_takes_default_branch": alt_flow_takes_default_branch,
+    "rules_without_invariants": rules_without_invariants,
     "unreachable_scenario": unreachable_scenario,
     "next_bypasses_policy": next_bypasses_policy,
     "policy_scenario_overlap": policy_scenario_overlap,

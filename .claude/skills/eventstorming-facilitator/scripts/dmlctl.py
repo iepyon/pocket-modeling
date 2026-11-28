@@ -14,19 +14,23 @@ DML ファイルへの **唯一の I/O 経路** になる。
         観点別 YAML スライスを stdout に出力する（Read 代替）。
         `--view=full` は全文を返す（安全弁）。`--view=top-level-keys` は構造概要のみ。
 
-    dmlctl init  <file> --session-id=<id> --domain=<name> [--goal=...] [--started-at=...]
+    dmlctl init  [<file>] --domain=<name> [--session-id=<id>] [--goal=...] [--started-at=...]
         テンプレートから新規 DML ファイルを作成する（Write 代替）。
-        既存ファイルがあれば拒否する（上書き事故防止）。
+        既存ファイルがあれば拒否する（上書き事故防止）。<file> を省くと実時計（UTC）から
+        docs/eventstorming/eventstorming-YYYYMMDD-HHMM.dml.yaml を付ける。session id は
+        ファイル名から、started_at は実時計から入る。ID の時刻が実時計とずれていれば警告する。
 
     dmlctl set   <file> --path=<a.b.c> (--value=<lit> | --value-file=<path>)
         単一フィールドを更新する。長文は --value-file で渡す（シェル引数上限回避）。
 
-    dmlctl add   <file> --to=<list-path> (--item=<lit> | --item-file=<path>)
-        リストに要素を 1 件追加する。
+    dmlctl add   <file> --to=<list-path> (--item=<lit> | --item-file=<path>) [--before=<k=v> | --after=<k=v>]
+        リストに要素を 1 件追加する（既定は末尾。--before/--after で位置を指定。
+        scenarios[] の並びは暫定フローの時系列になるので、途中に差し込むときに使う）。
 
     dmlctl update <file> --path=<list-path> --where=<key=value> \
                   (--set-key=<k> --value=<v> | --merge-yaml=<dict-lit>)
-        リスト内の特定要素を find & update する。
+        リスト内の特定要素を find & update する。--merge-yaml は dict を再帰マージするが、
+        リストは丸ごと置き換える（既存のリストが置き換わるときは警告。--dry-run で前後を表示）。
 
     dmlctl remove <file> --path=<a.b.c> [--where=<key=value>]
         フィールド/要素を削除する。--where 指定時はリスト内検索で削除。
@@ -52,6 +56,10 @@ DML ファイルへの **唯一の I/O 経路** になる。
     dmlctl action <file> --id=<id> [--not-done]
         actions[].done を id 指定でトグルする糖衣（既定は done: true）。
 
+    dmlctl decision <file> --id=<D#> --choose=<option名> [--why=...] [--reason=...]
+        decisions[] の採用案を付け替える（回答の選び直しの反映）。前の採用案は adopted を
+        外して why_not に「回答の選び直しで不採用（前→後）」を残す。decision は消さない。
+
     dmlctl derive-agg-events <file> [--agg=<Name>] [--dry-run]
         scenarios[].agg / policies[].agg が指す集約の events[] に、シナリオ・ポリシーの
         evt（brs[].evt を含む）のうち未宣言のものを {name} だけで足す（params は後で埋める）。
@@ -65,7 +73,7 @@ DML ファイルへの **唯一の I/O 経路** になる。
     dmlctl build <file> [--all]
         HTML を再生成する（eventstorming_build.py のラッパー）。
 
-    dmlctl quint <file> [--out F] [--duplicates] [--run] [--verify]
+    dmlctl quint <file> [--out F] [--duplicates] [--run] [--verify] [--backend auto|rust|typescript]
         集約・POLICY 連鎖を Quint の状態遷移系に変換し、invariants[] を検査する
         （dml_to_quint.py のラッパー。--run は quint CLI が必要）。
 
@@ -94,6 +102,7 @@ import json
 import re
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 try:
@@ -309,6 +318,31 @@ def _deep_merge(dst, patch: dict) -> None:
             dst[k] = v
 
 
+def _replaced_lists(dst, patch: dict, prefix: str = "") -> list[tuple[str, object, object]]:
+    """_deep_merge で **丸ごと置き換わる既存リスト** を (パス, 前, 後) で列挙する。
+
+    `--merge-yaml='{options: [{name: a}]}'` のように一部だけ足すつもりで渡すと、
+    既存の options が消える（再帰マージはリストの中へは降りない）。書く前に知らせるため。"""
+    out: list[tuple[str, object, object]] = []
+    for k, v in patch.items():
+        cur = dst.get(k) if isinstance(dst, dict) else None
+        path = f"{prefix}.{k}" if prefix else str(k)
+        if isinstance(v, dict) and isinstance(cur, dict):
+            out += _replaced_lists(cur, v, path)
+        elif isinstance(cur, list) and cur and cur != v:
+            out.append((path, cur, v))
+    return out
+
+
+def _plain(obj):
+    """ruamel のノードを素の Python 値にする（表示用）。"""
+    if isinstance(obj, dict):
+        return {k: _plain(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_plain(v) for v in obj]
+    return obj
+
+
 def _read_value_or_file(args, value_attr: str, file_attr: str):
     """`--value` と `--value-file` の排他処理。値を Python 値で返す。
 
@@ -329,6 +363,10 @@ def _read_value_or_file(args, value_attr: str, file_attr: str):
         text = Path(file_path).read_text(encoding="utf-8")
         return text
     return _parse_value(value, prose_hint=True)
+
+
+def _indent(text: str, pad: str = "   ") -> str:
+    return "\n".join(pad + line for line in text.splitlines())
 
 
 def _parse_where(where: str) -> tuple[str, object]:
@@ -518,9 +556,48 @@ def cmd_view(args) -> int:
 # ============================================================
 
 
+SESSION_DIR = Path("docs/eventstorming")
+_SESSION_ID_RE = re.compile(r"eventstorming-(\d{8})-(\d{4})")
+_CLOCK_SKEW_MIN = 60  # ファイル名の時刻が実時計からこれ以上ずれたら警告
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _session_stem(path: Path) -> str:
+    name = path.name
+    return name[: -len(".dml.yaml")] if name.endswith(".dml.yaml") else path.stem
+
+
+def _clock_skew_warning(session_id: str, now: datetime) -> str | None:
+    """ID の時刻が実時計から大きくずれていれば警告文を返す（時計を見ずに付けた ID の検出）。"""
+    m = _SESSION_ID_RE.fullmatch(session_id)
+    if not m:
+        return None
+    try:
+        stamped = datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return f"⚠ session id '{session_id}' の日時が読めません"
+    diff = abs((now - stamped).total_seconds()) / 60
+    if diff <= _CLOCK_SKEW_MIN:
+        return None
+    return (
+        f"⚠ session id の時刻（{stamped:%Y-%m-%d %H:%M} UTC）が実時計（{now:%Y-%m-%d %H:%M} UTC）と"
+        f" {int(diff)} 分ずれています。新しいセッションなら、ファイル名を省いて init すると実時計で付きます"
+    )
+
+
 def cmd_init(args) -> int:
     yml = _require_ruamel()
-    path = Path(args.file)
+    now = _utcnow()
+    path = Path(args.file) if args.file else SESSION_DIR / f"eventstorming-{now:%Y%m%d-%H%M}.dml.yaml"
+    session_id = args.session_id or _session_stem(path)
+    if session_id != _session_stem(path):
+        print(f"⚠ session id '{session_id}' とファイル名 '{path.name}' が食い違っています", file=sys.stderr)
+    skew = _clock_skew_warning(session_id, now)
+    if skew:
+        print(skew, file=sys.stderr)
     if path.exists():
         print(
             f"❌ {path} はすでに存在します。上書き事故防止のため init は拒否されました。\n"
@@ -539,16 +616,15 @@ def cmd_init(args) -> int:
         data = {}
 
     session = {
-        "id": args.session_id,
+        "id": session_id,
         "domain": args.domain,
         "phase": "1",
         "status": "Phase 1 (スコープ確認中)",
     }
     if args.goal:
         session["goal"] = args.goal
-    if args.started_at:
-        session["started_at"] = args.started_at
-    session["html_link"] = f"../../dist/eventstorming/{args.session_id}.html"
+    session["started_at"] = args.started_at or now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    session["html_link"] = f"../../dist/eventstorming/{session_id}.html"
 
     data["session"] = session
 
@@ -559,7 +635,7 @@ def cmd_init(args) -> int:
     body = buf.getvalue()
     path.write_text(DML_HEADER + body, encoding="utf-8")
 
-    print(f"✅ {path} を作成しました（session id={args.session_id}）")
+    print(f"✅ {path} を作成しました（session id={session_id}）")
     if not args.no_postprocess:
         _run_postprocess(path, data)
     return 0
@@ -662,8 +738,24 @@ def cmd_add(args) -> int:
         item = _parse_value(text)
     else:
         item = _parse_value(args.item)
-    target.append(item)
-    print(f"✅ {args.to} に 1 件追加しました（計 {len(target)} 件）", file=sys.stderr)
+    anchor = args.before or args.after
+    if args.before and args.after:
+        print("❌ --before と --after は排他", file=sys.stderr)
+        return 2
+    if anchor:
+        akey, aval = _parse_where(anchor)
+        hits = _match_indices(target, akey, aval)
+        if len(hits) != 1:
+            what = "見つかりません" if not hits else f"{len(hits)} 件あり、位置を決められません"
+            print(f"❌ {args.to} に {akey}={aval!r} の要素が{what}", file=sys.stderr)
+            return 2
+        pos = hits[0] if args.before else hits[0] + 1
+        target.insert(pos, item)
+        where = f"{akey}={aval!r} の{'前' if args.before else '後'}"
+        print(f"✅ {args.to} の {where}に 1 件追加しました（計 {len(target)} 件）", file=sys.stderr)
+    else:
+        target.append(item)
+        print(f"✅ {args.to} に 1 件追加しました（計 {len(target)} 件）", file=sys.stderr)
     return _save(path, yml, data, args)
 
 
@@ -753,6 +845,17 @@ def cmd_update(args) -> int:
 
     for idx in matched_indices:
         elem = target_list[idx]
+        if args.merge_yaml is not None:
+            for lpath, old, new in _replaced_lists(elem, patch):
+                print(
+                    f"⚠ {args.path}[{key}={expected!r}].{lpath} のリストは丸ごと置き換わります"
+                    f"（{len(old)} 件 → {len(new) if isinstance(new, list) else 1} 件）。"
+                    "1 件だけ足すなら `add --to=...` を使ってください",
+                    file=sys.stderr,
+                )
+                if args.dry_run:
+                    dump = lambda o: yaml.safe_dump(_plain(o), allow_unicode=True, sort_keys=False).rstrip()  # noqa: E731
+                    print("   --- 前\n" + _indent(dump(old)) + "\n   --- 後\n" + _indent(dump(new)), file=sys.stderr)
         _deep_merge(elem, patch)
     print(
         f"✅ {args.path}[{key}={expected!r}] を {len(matched_indices)} 件更新しました",
@@ -928,6 +1031,53 @@ def cmd_derive_agg_events(args) -> int:
     return _save(path, yml, data, args)
 
 
+def cmd_decision(args) -> int:
+    """decisions[id=...] の採用案を付け替える（選び直しの反映）。
+
+    前の採用案は adopted を外し、why_not に「回答の選び直しで不採用（前→後）」を書く
+    （元の why は「当初の採用理由」として残す）。新しい採用案は adopted: true にし、
+    古い why_not は外す（採用した案に不採用理由が残ると読み手を誤らせる）。decision は消さない。"""
+    yml, path, data = _load_doc(args.file)
+    decisions = (data or {}).get("decisions") or []
+    hits = [d for d in decisions if isinstance(d, dict) and str(d.get("id")) == args.id]
+    if not hits:
+        print(f"❌ decisions に id={args.id} が見つかりません", file=sys.stderr)
+        return 2
+    dec = hits[0]
+    options = [o for o in dec.get("options") or [] if isinstance(o, dict)]
+    by_name = {o.get("name"): o for o in options}
+    if args.choose not in by_name:
+        print(f"❌ {args.id} の options に '{args.choose}' がありません（既知: {', '.join(map(str, by_name))}）", file=sys.stderr)
+        return 2
+    prev = dec.get("chosen")
+    if prev == args.choose and by_name[args.choose].get("adopted") is True:
+        print(f"ℹ {args.id} はすでに '{args.choose}' を採用しています（変更なし）", file=sys.stderr)
+        return 0
+    for o in options:
+        if o is by_name[args.choose] or not o.get("adopted"):
+            continue
+        old_why = o.pop("why", None)
+        o.pop("adopted", None)
+        label = lambda n: (by_name.get(n) or {}).get("label") or n  # noqa: E731
+        reason = args.reason or f"回答の選び直しで不採用（{label(o.get('name'))}→{label(args.choose)}）"
+        o["why_not"] = reason + (f"。当初の採用理由: {old_why}" if old_why else "")
+    new = by_name[args.choose]
+    new.pop("why_not", None)
+    new["adopted"] = True
+    if args.why:
+        new["why"] = args.why
+    dec["chosen"] = args.choose
+    if args.decided_by:
+        dec["decided_by"] = args.decided_by
+    print(f"✅ {args.id}: 採用案を '{prev}' → '{args.choose}' に付け替えました", file=sys.stderr)
+    if not new.get("why"):
+        print("   ℹ 新しい採用案に why がありません。回答者が理由を言っていれば --why で足してください（推測では書かない）", file=sys.stderr)
+    affects = dec.get("affects") or []
+    if affects:
+        print(f"   影響先（affects）: {', '.join(map(str, affects))} — 前の回答から派生した記述を dmlctl refs で確かめてください", file=sys.stderr)
+    return _save(path, yml, data, args)
+
+
 def cmd_action(args) -> int:
     """actions[].done を id 指定でトグルする糖衣。"""
     yml, path, data = _load_doc(args.file)
@@ -1074,7 +1224,7 @@ def cmd_quint(args) -> int:
         cmd.append("--verify")
     # 既定値は dml_to_quint.py だけが持つ。指定されたフラグだけ転送する
     for flag, value in (("--max-steps", args.max_steps), ("--max-samples", args.max_samples),
-                        ("--verify-steps", args.verify_steps)):
+                        ("--verify-steps", args.verify_steps), ("--backend", args.backend)):
         if value is not None:
             cmd.append(f"{flag}={value}")
     return subprocess.run(cmd, check=False).returncode
@@ -1141,11 +1291,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_view.set_defaults(func=cmd_view)
 
     p_init = sub.add_parser("init", help="新規 DML ファイルをテンプレートから作成する")
-    p_init.add_argument("file")
-    p_init.add_argument("--session-id", required=True, help="session.id（例: eventstorming-20260530-1430）")
+    p_init.add_argument("file", nargs="?", help="省略時は docs/eventstorming/eventstorming-<実時計 UTC>.dml.yaml")
+    p_init.add_argument("--session-id", help="session.id（省略時はファイル名から。例: eventstorming-20260530-1430）")
     p_init.add_argument("--domain", required=True, help="session.domain（例: trivago-hotel-search）")
     p_init.add_argument("--goal", help="session.goal（任意）")
-    p_init.add_argument("--started-at", help="session.started_at（ISO8601）")
+    p_init.add_argument("--started-at", help="session.started_at（ISO8601。省略時は実時計 UTC）")
     p_init.add_argument("--no-postprocess", action="store_true", help="build + validate を抑止（テスト用）")
     p_init.set_defaults(func=cmd_init)
 
@@ -1162,6 +1312,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_add.add_argument("--to", required=True, help="例: questions")
     p_add.add_argument("--item", help="YAML リテラル")
     p_add.add_argument("--item-file", help="大型 YAML 要素を含むファイル")
+    p_add.add_argument("--before", help="key=value の要素の直前に挿入する（例: name=起案者が提出する）")
+    p_add.add_argument("--after", help="key=value の要素の直後に挿入する")
     _add_write_flags(p_add)
     p_add.set_defaults(func=cmd_add)
 
@@ -1213,6 +1365,16 @@ def build_parser() -> argparse.ArgumentParser:
     _add_write_flags(p_action)
     p_action.set_defaults(func=cmd_action)
 
+    p_decision = sub.add_parser("decision", help="decisions[] の採用案を付け替える（選び直しの反映。前の案の理由は why_not に残す）")
+    p_decision.add_argument("file")
+    p_decision.add_argument("--id", required=True, help="対象 decision の id（例: D14）")
+    p_decision.add_argument("--choose", required=True, help="新しく採用する options[].name")
+    p_decision.add_argument("--why", help="新しい採用案の理由（回答者が言ったときだけ）")
+    p_decision.add_argument("--reason", help="前の採用案の why_not（省略時は「回答の選び直しで不採用（前→後）」）")
+    p_decision.add_argument("--decided-by", choices=["user", "ai-default", "ai-persona"], help="decided_by も更新する")
+    _add_write_flags(p_decision)
+    p_decision.set_defaults(func=cmd_decision)
+
     p_derive = sub.add_parser(
         "derive-agg-events",
         help="シナリオ／ポリシーの evt から aggregates[].events[] の不足分を足す",
@@ -1257,6 +1419,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_quint.add_argument("--max-steps", type=int)
     p_quint.add_argument("--max-samples", type=int)
     p_quint.add_argument("--verify-steps", type=int)
+    p_quint.add_argument("--backend", choices=["auto", "rust", "typescript"],
+                         help="quint run の評価器（既定 auto: rust で結果が出なければ typescript でやり直す）")
     p_quint.set_defaults(func=cmd_quint)
 
     p_views = sub.add_parser("views", help="利用可能な view 名を列挙する")

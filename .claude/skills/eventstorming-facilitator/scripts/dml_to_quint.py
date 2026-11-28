@@ -6,11 +6,13 @@
 
 使い方:
     python3 scripts/dml_to_quint.py <file.dml.yaml> [--out <file.qnt>] [--duplicates]
-    python3 scripts/dml_to_quint.py <file.dml.yaml> --run [--max-steps N] [--max-samples N]
+    python3 scripts/dml_to_quint.py <file.dml.yaml> --run [--max-steps N] [--max-samples N] [--backend auto|rust|typescript]
     python3 scripts/dml_to_quint.py <file.dml.yaml> --verify [--verify-steps N]
 
 --run   は Quint CLI（`quint`、または環境変数 QUINT_BIN）で `quint run`（ランダムシミュレーション）を実行する。
         safety は `step` 上の allInvariants、liveness は `stepLive` 上の allQuiescent（下記）を検査する。
+        --backend は quint run の評価器。既定の auto は rust（速い）で走らせ、評価器を取得できずに
+        結果が出なかったとき（ネットワーク制限で GitHub から落とせない等）だけ typescript でやり直す。
 --verify は `quint verify`（Apalache による有界モデル検査）で同じ 2 つを網羅的に検査する。
         初回は Apalache を自動取得する。ステップ数が大きいと時間がかかる（60 アクション規模で
         9 ステップ約 2 分）ため、深い状態へ到達する検査は --run を使う。
@@ -359,6 +361,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-steps", type=int, default=DEFAULT_MAX_STEPS)
     ap.add_argument("--max-samples", type=int, default=DEFAULT_MAX_SAMPLES)
     ap.add_argument("--verify-steps", type=int, default=DEFAULT_VERIFY_STEPS, help="--verify の探索ステップ数上限")
+    ap.add_argument("--backend", choices=["auto", "rust", "typescript"], default="auto",
+                    help="quint run の評価器（auto: rust で結果が出なければ typescript でやり直す）")
     args = ap.parse_args(argv)
 
     src = Path(args.file)
@@ -386,10 +390,35 @@ def main(argv: list[str] | None = None) -> int:
     rc = 0
     for label, inv_name, step in jobs:
         for sub, *opts in modes:
-            print(f"▶ quint {sub} {label}")
+            print(f"▶ quint {sub} {label}", flush=True)
             cmd = quint + [sub, str(out), f"--main={MODULE}", f"--invariant={inv_name}", f"--step={step}", *opts]
-            rc = subprocess.run(cmd, check=False).returncode or rc
+            if sub == "run":
+                rc = run_simulation(cmd, args.backend) or rc
+            else:
+                rc = subprocess.run(cmd, check=False).returncode or rc
     return rc
+
+
+# quint run が検査結果を出したかどうかの目印（[ok] / [violation]）。どちらも無く失敗したら
+# 評価器そのものが動かなかったと見なす（rust 評価器は初回に GitHub から取得するため、
+# ネットワーク制限のある環境では結果を出す前に落ちる）
+_RESULT_MARK = re.compile(r"^\[(ok|violation)\]", re.MULTILINE)
+
+
+def run_simulation(cmd: list[str], backend: str) -> int:
+    """quint run を評価器を選んで実行し、終了コードを返す。
+
+    auto は rust で走らせ、結果が出ずに失敗したときだけ typescript でやり直す。"""
+    if backend != "auto":
+        return subprocess.run(cmd + [f"--backend={backend}"], check=False).returncode
+    first = subprocess.run(cmd + ["--backend=rust"], check=False, capture_output=True, text=True)
+    sys.stdout.write(first.stdout)
+    sys.stderr.write(first.stderr)
+    if first.returncode == 0 or _RESULT_MARK.search(first.stdout + first.stderr):
+        return first.returncode
+    print("⚠ rust の評価器で検査結果が出ませんでした（評価器を取得できない環境の可能性）。typescript でやり直します",
+          file=sys.stderr, flush=True)
+    return subprocess.run(cmd + ["--backend=typescript"], check=False).returncode
 
 
 if __name__ == "__main__":

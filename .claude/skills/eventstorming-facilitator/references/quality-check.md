@@ -48,6 +48,8 @@ DML 品質チェックは **2 段階**で行う：
 | `state_dead_end` | 出る遷移が無く terminalStates にも無い状態（warn） | 終端なら `aggregates[].terminalStates` に宣言、でなければ遷移を追加 |
 | `undeclared_ctx` | scenarios / policies / aggregates / queries の `ctx` が contexts[] に宣言されていない（warn）。dmlctl の書き込みの後処理でも警告する | `dmlctl add <file> --to=contexts --item='{name: <ctx>, label_ja: <日本語名>}'` |
 | `alt_narrative_entry` | `kind: alt` の narrative に `entry` が無い（フロー連鎖を書き始めた DML のみ・warn） | 代替の流れの起点シナリオを `entry` に書く |
+| `alt_flow_takes_default_branch` | `kind: alt` の流れが、メインの流れと同じ道（既定の分岐）だけをたどっている。entry がメインの道の上にあり、途中に `terminal: <この流れ>` も、この流れの id をキーにした `next` も無い（warn。happy に entry がある DML のみ） | entry を分岐の先のシナリオに置く／分岐に `terminal` を付ける／`next` を dict にする（SKILL.md「Event Flow」の代替の流れの書き方） |
+| `rules_without_invariants` | フェーズ 5 以降で、集約が 2 つ以上・`rules` が 1 件以上あるのに、`invariants[]` と `requires` が 0 件（warn） | 集約をまたぐ状態の決まりを `invariants[]` と `requires` に書く（SKILL.md「決まりの振り分け」）。1 集約の中で閉じる決まりだけなら、意図どおりとして読み流す |
 | `unreachable_scenario` | どの narrative の entry からも `next` / `brs[].next` / policy で辿れないシナリオ（warn） | 連鎖でつなぐか、独立した操作なら、それを entry にした `kind: alt` の narrative を足す |
 | `next_bypasses_policy` | POLICY が起動する CMD のシナリオへ、その POLICY の trg を発行しないシナリオから `next` で直結（warn） | trg を発行するシナリオを間に挟む。人が起動する経路なら actor の違うシナリオに分ける（playbook §6） |
 | `policy_scenario_overlap` | POLICY とシナリオで同じ CMD の evt / agg が食い違う／副作用専用 POLICY の evt をシナリオも発行（warn） | 中身を揃えるか、どちらか一方に寄せる（playbook §6） |

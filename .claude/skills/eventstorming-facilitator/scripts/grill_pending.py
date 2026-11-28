@@ -12,6 +12,10 @@
     - 回答の qid が grill/progress の reflected に無い
     - 回答の at が reflected[qid].at より新しい（パネルの「選び直す」で届いた回答）
 
+反映の記録の時刻（reflected[qid].at）が現在より先になっているものは、警告を出す。
+未来の時刻があると、その後に届いた選び直しが「反映済み」に見えて拾えなくなるため、
+その qid の選び直し（rev / prev 付き）は「要確認」として一覧に含める。
+
 終了コード: 0 = 未反映なし（何も出さない）／ 1 = 未反映あり（一覧を出す）／ 2 = 入力の誤り
 
 ArtifactData が保存する JSON が「ドキュメント本体」か「{data|fields: 本体, version, …}」の
@@ -69,16 +73,38 @@ def load_answers(root: Path) -> list[dict]:
     return out
 
 
-def load_reflected(root: Path) -> dict:
-    for cand in (root / "grill" / "progress.json", root / "progress.json"):
+def load_grill_doc(root: Path, doc_id: str) -> tuple[dict, object]:
+    """保存した grill/<doc_id> を (本体, version) で返す。無ければ ({}, None)。
+    version は ArtifactData の書き込みの if_version に使う（包まれていない保存形式なら None）。"""
+    for cand in (root / "grill" / f"{doc_id}.json", root / f"{doc_id}.json"):
         if cand.is_file():
-            doc = _unwrap(json.loads(cand.read_text(encoding="utf-8")))
-            reflected = doc.get("reflected")
-            return reflected if isinstance(reflected, dict) else {}
-    return {}
+            raw = json.loads(cand.read_text(encoding="utf-8"))
+            version = raw.get("version") if isinstance(raw, dict) else None
+            return _unwrap(raw), version
+    return {}, None
 
 
-def pending(answers: list[dict], reflected: dict) -> list[dict]:
+def load_reflected(root: Path) -> dict:
+    reflected = load_grill_doc(root, "progress")[0].get("reflected")
+    return reflected if isinstance(reflected, dict) else {}
+
+
+CLOCK_SLACK_SEC = 120  # 時計の揺れとして許す幅
+
+
+def future_reflections(reflected: dict, now: datetime | None = None) -> dict[str, datetime]:
+    """reflected のうち、at が現在（＋揺れ）より先のもの（qid → at）。手書きの時刻の誤り。"""
+    now = now or datetime.now(timezone.utc)
+    out = {}
+    for qid, rec in reflected.items():
+        at = _parse_at(rec.get("at")) if isinstance(rec, dict) else None
+        if at and (at - now).total_seconds() > CLOCK_SLACK_SEC:
+            out[qid] = at
+    return out
+
+
+def pending(answers: list[dict], reflected: dict, now: datetime | None = None) -> list[dict]:
+    future = future_reflections(reflected, now)
     rows = []
     for a in answers:
         qid = a.get("qid")
@@ -90,6 +116,8 @@ def pending(answers: list[dict], reflected: dict) -> list[dict]:
         if a_at and r_at and a_at > r_at:
             reason = "選び直し" if a.get("rev") or a.get("prev") else "反映後に更新"
             rows.append({**a, "_reason": reason})
+        elif qid in future and (a.get("rev") or a.get("prev")):
+            rows.append({**a, "_reason": "要確認（反映の記録の時刻が未来）"})
     rows.sort(key=lambda r: _parse_at(r.get("at")) or datetime.max.replace(tzinfo=timezone.utc))
     return rows
 
@@ -108,7 +136,14 @@ def main(argv: list[str] | None = None) -> int:
     if not root.is_dir():
         print(f"❌ ディレクトリがありません: {root}", file=sys.stderr)
         return 2
-    rows = pending(load_answers(root), load_reflected(root))
+    reflected = load_reflected(root)
+    for qid, at in sorted(future_reflections(reflected).items()):
+        print(
+            f"⚠ grill/progress.reflected['{qid}'].at が現在より先です（{at:%Y-%m-%dT%H:%M:%SZ}）。"
+            "時刻は手で書かず grill_reflect.py で付けてください。この qid の選び直しは拾えないことがあります",
+            file=sys.stderr,
+        )
+    rows = pending(load_answers(root), reflected)
     if not rows:
         return 0
     if args.json:
