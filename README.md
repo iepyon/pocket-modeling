@@ -84,12 +84,14 @@ DimML は別パイプライン（`validate_dimml.py` → `dimml_build.py`）で�
 
 ## セットアップ
 
-1. リポジトリを clone し、ルートで [Claude Code](https://claude.com/claude-code) を起動する（`.claude/settings.json` のフックとスキルが自動で有効になる。スクリプトはすべてリポジトリルートからの相対パスで動く）。
+1. リポジトリを clone し、ルートで [Claude Code](https://claude.com/claude-code) を起動する（`.claude/settings.json` のフックとスキルが自動で有効になる。スクリプトはリポジトリルートからの相対パスで動く。フックは `$CLAUDE_PROJECT_DIR` 基準なので、作業フォルダがサブフォルダに移っても効く）。
 2. Python 3 と依存ライブラリを入れる:
 
 ```sh
-pip install pyyaml jsonschema ruamel.yaml
+pip install -r .claude/skills/eventstorming-facilitator/requirements.txt
 ```
+
+Claude Code のセッション開始時には SessionStart フック（`.claude/hooks/session-start.sh`）が同じものを入れる（入っていれば何もしない）。クラウドの新しいセッションでも、最初の `dmlctl init` が依存不足で落ちない。
 
 - `pyyaml` / `jsonschema` — 検証・ビルド用
 - `ruamel.yaml` — `dmlctl` の構造化編集（set/add/remove、コメント・引用形式を維持）用

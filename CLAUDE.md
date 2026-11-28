@@ -31,7 +31,7 @@ python3 .claude/skills/dimensional-modeling-facilitator/scripts/dimml_build.py -
 ## 最重要の運用原則
 
 - **DML が唯一の真実源**。HTML は派生物なので絶対に手で編集しない。`.md` 入力サポートは v5 で廃止済み（YAML-only）
-- **DML への I/O は `scripts/dmlctl.py` 経由のみ**。`docs/eventstorming/*.dml.yaml` への `Read`/`Edit`/`Write` は **PreToolUse フック（`scripts/hooks/block_direct_dml.py`）が技術的にブロック**する（exit 2、stderr で dmlctl 代替コマンドを案内）。新規作成は `dmlctl init`、参照は `dmlctl view`、編集は `dmlctl set/add/remove/update`。手動編集が必要な場合は Claude Code の外のエディタを使う
+- **DML への I/O は `scripts/dmlctl.py` 経由のみ**。`docs/eventstorming/*.dml.yaml` への `Read`/`Edit`/`Write` は **PreToolUse フック（`scripts/hooks/block_direct_dml.py`）が技術的にブロック**する（exit 2、stderr で dmlctl 代替コマンドを案内）。新規作成は `dmlctl init`、参照は `dmlctl view`、編集は `dmlctl set/add/remove/update`。手動編集が必要な場合は Claude Code の外のエディタを使う。**フックが止めるのは `Read`/`Edit`/`Write` 系だけ**で、`Grep` ツールや Bash の `grep` による語の探索は止めない（方針の趣旨は「全文を読み込まない・直接編集しない」なので、散文中の語の残りを探す用途に限って `Grep` を使ってよい。識別子の探索は `dmlctl refs` を使う）。フックのパスは `$CLAUDE_PROJECT_DIR` 基準なので、作業フォルダがサブフォルダに移っても効く
 - **dmlctl 経由の書き込みは build + validate を自動実行**（PreToolUse で Write/Edit がブロックされるため PostToolUse hook が走らない代わり、dmlctl 自身が後処理を回す）。テストで抑止するときは `--no-postprocess`
 - **PostToolUse hook** は安全網として残置（直接 Write/Edit が万一すり抜けた場合の build + validate）。通常は dmlctl 経由なので発火しない
 - **Artifact ツールがあるセッションでは HTML を Artifact として公開する**（`eventstorming_build.py <dml> --artifact` → `dist/eventstorming/<session>-artifact.html`）。ページ上部の質問パネルに 1 問ずつ出し、回答が届いたら DML 更新 → 再公開 → 次の質問。手順・db の形・守ることは SKILL.md「Artifact 上のグリル」。ディメンショナル側は未対応
@@ -47,7 +47,7 @@ python3 .claude/skills/dimensional-modeling-facilitator/scripts/dimml_build.py -
 
 ## 主要なコマンド
 
-すべてリポジトリルートから実行。Python 3 と `pyyaml` / `jsonschema` / `ruamel.yaml`（dmlctl の set/add/remove 用）が必要。
+すべてリポジトリルートから実行。Python 3 と `pyyaml` / `jsonschema` / `ruamel.yaml`（dmlctl の set/add/remove 用）が必要（`pip install -r .claude/skills/eventstorming-facilitator/requirements.txt`。Claude Code では SessionStart フック `.claude/hooks/session-start.sh` が自動で入れる）。
 
 ```sh
 # DML 観点別スライス取得（コンテキスト節約）

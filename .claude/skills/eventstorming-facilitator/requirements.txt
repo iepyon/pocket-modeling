@@ -1,0 +1,5 @@
+# eventstorming-facilitator / dimensional-modeling-facilitator の Python 依存
+# インストール: pip install -r .claude/skills/eventstorming-facilitator/requirements.txt
+pyyaml
+jsonschema
+ruamel.yaml

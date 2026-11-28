@@ -202,9 +202,11 @@ DML（Domain Modeling Language）に関するルールは 3 つの真実源に�
 
   合わせて `policies[...].note` に「`EventAlreadyCancelled` ガードで連鎖発火を防いでいる」と明記するとレビュー時に relation を辿りやすい。
 
+- **自動で起動する CMD は POLICY だけに書く（`next` で直結しない・二重に宣言しない）**: 「在庫が減ったら焙煎する」のように、ある EVT を受けて自動で起動する CMD は `policies[].cmd` に書き、その CMD を実行する SCENARIO へは**別の SCENARIO の `next` から直接つながない**。`next` で直結すると、図の上では「入荷したらそのまま焙煎」という手順の連続に見え、「在庫が閾値を下回ったら」という起動条件（POLICY の意味）が消える。また、同じ CMD を「POLICY の `cmd`」と「別アクターが起動する SCENARIO」の両方で宣言しない。人が起動する経路と自動の経路が本当に両方あるなら、SCENARIO を 2 本に分け `actor` で区別する（例: `マスターが焙煎を指示する` / `システムが焙煎を予約する`）。副作用専用 POLICY（`cmd` 無し）と同じ通知を SCENARIO にも書くのも同じ重複になる。どちらかに寄せる: 内部 AGG を変えないなら POLICY だけ、変えるなら SCENARIO を書き POLICY は `cmd` でそれを指す。
+
 ### 検証観点
 
-- 構造: `unknown_evt_in_policy`（trg/trgs の実在）、`dangling_cmd`（policies[].cmd）。
+- 構造: `unknown_evt_in_policy`（trg/trgs の実在）、`dangling_cmd`（policies[].cmd）、`policy_cmd_direct_next`（POLICY の CMD を別シナリオの `next` で直結）、`cmd_dual_declaration`（同じ CMD をポリシーとシナリオで二重宣言）。
 - 意味: [`checks/saga-completeness.md`](./checks/saga-completeness.md)（Saga 完結性・POLICY オーバーラップ・補償 TX・OR の妥当性）。
 
 ---
@@ -258,6 +260,7 @@ DML（Domain Modeling Language）に関するルールは 3 つの真実源に�
   | `events[]` | emit する EVT 宣言（`params[]` は `attrs[]` と同構造）。HTML §7 でペイロード表 |
 
 - **`purpose` は業務語彙・単一責任で**（`checks/agg-purpose-quality.md` の根拠）: 実装詳細（「テーブル trade_in を CRUD する」）や短すぎる記述（「下取を扱う」）は NG。OK 例「旧機種の引き受けから売買成立まで状態を所有し、各遷移の根拠を法令準拠で明示する」。
+- **不変条件と運用モードを分ける**: `constraints[]` は「どの運用でも破れない業務の制約」（例: 焙煎ロットは生豆ロット 1 つからだけ作る）を書く場所。「当面は全ロットを試飲する」「繁忙期は予約を止める」のような**店の運用の選び方（運用モード）**は、変わりうる方針なので `constraints[]` に書かない。運用モードは `decisions[]`（何を選んだか・なぜか）に記録し、モードで振る舞いが分かれるなら SCENARIO の `rules[]` か `brs[].cond` に条件として書く。`constraints[]` に運用モードが混ざると、方針を変えたときに集約の定義そのものを書き換えることになる。
 - **AGG は所有 BC が 1 つ**: 複数 BC で参照される AGG でも `ctx` は 1 つに決める。参照側 BC は up/dn の依存関係で表現する（§9）。
 - **transitions[] の初期化規約**: **AGG 生成（creation）は `transitions[]` に書かない**（schema の `from` は実在状態名のみ、`(initial)` 等の疑似状態は不可）。
 
@@ -272,7 +275,7 @@ DML（Domain Modeling Language）に関するルールは 3 つの真実源に�
 
 ### 検証観点
 
-- 構造: `orphan_agg`（どの scenario からも参照されない）、`dangling_cmd`、`state_reachability`、`agg_purpose_minlength`、`cross_bc_state_name_collision`。
+- 構造: `orphan_agg`（どの scenario からも参照されない）、`dangling_cmd`、`state_reachability`、`agg_purpose_minlength`、`cross_bc_state_name_collision`、`scenario_agg_consistency`（不足する `events[]` は `dmlctl derive-agg-events` で補える）。
 - 意味整合の突合: `scenarios[].agg` ⇔ `aggregates[].name`、`scenarios[].cmd` ⇔ `transitions[].via`、`scenarios[].evt` ⇔ `events[].name`、`contexts[].aggs` ⇔ `aggregates[].ctx`。
 - 意味: [`checks/agg-purpose-quality.md`](./checks/agg-purpose-quality.md)（単一責任・業務語彙・WHY）。
 
@@ -371,11 +374,13 @@ DML（Domain Modeling Language）に関するルールは 3 つの真実源に�
   | `options[]` | 検討した全選択肢を書く（1 件しか書かないと「比較していない」シグナル） |
   | `options[].why` / `why_not` | **業務文脈**で書く（採用: 業務が何が楽になるか／不採用: 業務的に何が不利か）。「実装が楽」だけでなく業務的な違いを |
   | `affects[]` | 影響を受ける AGG / Policy / BC 名。AGG 名は必ず含める。Policy 連鎖に影響するなら Policy 名も。Event 単独は粒度が低すぎる |
-  | `note` | 「決まったが後で見直す可能性のある条件」「関連する未決問題」等 |
+  | `note` | 「決まったが後で見直す可能性のある条件」「関連する未決問題」等。決着したら「Q○で確認中」のような古い記述は消す |
+  | `decided_by` | 誰が選んだか。`user`（本人が選んだ・既定）／`ai-default`（「おまかせ」で AI が選んだ）／`ai-persona`（自動実行で、AI が顧客像に沿って代わりに選んだ）。`ai-*` は本人未確認の印で、`dmlctl view --view=ai-decided` で一覧できる。本人が確認したら `user` に直す |
 
 - **業務文脈で書く**（`why`/`why_not`）の目安: 「この理由を後から読んだ人が、自分でコードレビューに反映できるか」。できないなら抽象的すぎる。
   - わかりにくい: `why_not: 責務違反` → わかりやすい: `Participation 集約に capacity を持たせると、申込のたびに他を全部読んで合計しないと残席が出せず、ロック競合が頻発する`。
 - **ストローマン論法を避ける**: `why_not` を複数 decision で使い回すと選択肢の固有性を語れていない。各オプションの固有の不利点に書き換える。
+- **理由が分からない `why_not` は省略する**: 回答者が理由を言わずに選んだとき、選ばなかった案の `why_not` は空でよい。「回答者は選ばなかった（理由は未確認）」の定型文や AI の推測で埋めない（意味チェックが「同じ文言の `why_not` が 3 件以上」を指摘する）。理由を聞く価値のある論点だけ、次の質問で聞く。
 - **「決められないとき」**: `chosen: 未確定` で保留し `options[]` の理由だけ埋めておく。`[?]` より一段構造化されており、品質チェックが「未確定 decision の長期残存」を検出する余地もある。
 
 ### 検証観点
