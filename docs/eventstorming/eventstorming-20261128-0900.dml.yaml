@@ -1,0 +1,1580 @@
+# ⚠ This file is managed by dmlctl (.claude/skills/eventstorming-facilitator/scripts/dmlctl.py).
+# AI agents must use `dmlctl view/init/set/add/remove/update` and MUST NOT edit this file directly
+# (PreToolUse hook blocks direct Read/Edit/Write). Humans may edit outside Claude Code.
+
+# =============================================================================
+# DML テンプレート — 新規 EventStorming セッション
+# =============================================================================
+# `dmlctl init <file> --session-id=... --domain=...` がこのテンプレートから
+# session 入りの空 DML を生成する。以降は dmlctl set/add/update で育てる。
+#
+# 全フィールドは optional。空 YAML（{} のみ）でも valid（進行中セッション許容）。
+# HTML（dist/eventstorming/*.html）は本 YAML のみから自動生成される。
+#
+# 各フィールドの書き方の正典：
+#   - 型・必須・enum      → references/dml.schema.yaml（書く前に `dmlctl hint --path=<a.b.c>`）
+#   - 設計判断・モデリングルール → references/ddd-playbook.md（DDD 概念軸の正典）
+#   - 記入済みのフル例    → examples/sample.dml.yaml
+# =============================================================================
+#
+# トップレベルフィールド一覧（記入順の目安 = フェーズ進行順）：
+#
+#   session:      # セッションメタ（id / domain / phase / status / goal / started_at）
+#                 # phase の前進は `dmlctl advance` を使う（enum 検証つき）
+#
+#   narratives:   # 散文＋フロー起点。kind: happy は 1 本（400〜600 字）、
+#                 # kind: alt は複数可（100〜200 字）。entry 指定で §2 フロー図を駆動
+#
+#   domains:      # サブドメイン分類（subs[].type: CORE/SUPPORTING/GENERIC_SUBDOMAIN）
+#
+#   contexts:     # BC 宣言。name / description（散文）/ lang（英→日辞書：
+#                 # aggs/actors/cmds/evts/pols/qrys/vos）/ up / dn / aggs（AGG 名簿）
+#
+#   aggregates:   # AGG 詳細。name / ctx / purpose / background / constraints /
+#                 # states / transitions / attrs / events
+#                 # 生成 CMD は transitions に書かない（ddd-playbook §8「transitions[] の初期化規約」）
+#
+#   scenarios:    # CMD 実行ユースケース。name（日本語・アクター＋行為）/ ctx / actor /
+#                 # cmd / evt|brs / agg / rules / errs / next（フロー連鎖）
+#
+#   policies:     # EVENTUAL-TX 専用。trg（単一）or trgs（join/OR）/ cmd / evt /
+#                 # bulk（true なら qry 必須）/ within（遅延許容 SLA）
+#
+#   decisions:    # 意思決定ログ。topic / chosen / options[]（name/label/why/why_not）/ affects
+#
+#   questions:    # オープンクエスチョン（status: open|closed、closed は decision_id 必須）
+#   actions:      # 次のアクション（done フラグで進捗管理。`dmlctl action` で更新）
+#   queries:      # リードモデル候補（name / ctx / purpose / users / sources / formula)
+#
+# aggregates / policies / scenarios を足したら、所属 BC の contexts[].lang にも
+# 英→日ラベルを同時登録する（漏れは language_coverage チェックが検出）。
+# =============================================================================
+session:
+  id: eventstorming-20261128-0900
+  domain: 新規事業の起案（事業計画書の作成・レビュー・承認／AIエージェント前提）
+  phase: '7'
+  status: 'Phase 7 完了。構造チェック エラー0（警告1: 基準を定める操作は意図的に流れの外）。意味チェック6観点の所見に対応済み。不変条件5本をQuintのランダム検査にかけ違反なし。未確認事項なし'
+  html_link: ../../dist/eventstorming/eventstorming-20261128-0900.html
+  goal: AIエージェントが下書き・レビュー・修正・承認の一次判定まで担い、人（経営会議）は最終判断に集中する形で、新規事業の起案から承認までの流れを設計する。結果は、この流れを支える仕組み（システム・エージェント）づくりに使う
+decisions:
+  - id: D1
+    topic: AIエージェントに任せる範囲
+    chosen: draft-review-revise-prejudge
+    options:
+      - adopted: true
+        label: 下書き・レビュー・修正・承認の一次判定まで任せる
+        name: draft-review-revise-prejudge
+        why: 計画書を整える作業（下書き・レビュー・修正・一次判定）はすべてAIエージェントに任せ、人はD4の4場面（アイデア出し・提出前の確認・最終承認・AIが迷ったときの相談）だけに関わる（質問への回答で4つすべてを選択）
+      - label: 下書きだけ任せる
+        name: draft-only
+      - label: 下書きとレビューまで任せる
+        name: draft-and-review
+    affects:
+      - session.goal
+    decided_by: user
+  - id: D2
+    topic: モデリング結果の使いみち
+    chosen: build-system
+    options:
+      - name: build-system
+        label: 仕組み（システム・エージェント）を作る
+        adopted: true
+        why: AIエージェントが扱う情報や判定の基準まで細かく決めて、実際に動く仕組みにしたい
+      - name: improve-process
+        label: 仕事のやり方を見直す
+      - name: explain
+        label: 人に説明する・引き継ぐ
+    affects:
+      - session.goal
+    decided_by: user
+  - id: D3
+    topic: 新規事業の起案を最終的に承認する主体
+    chosen: executive-meeting
+    options:
+      - adopted: true
+        label: 経営会議・役員会（会議の場で話し合う）
+        name: executive-meeting
+        why: '新規事業を始めるかどうかは、役員が集まる場で意見を出し合ったうえで決める（決め方はD31: 議長が決める）'
+      - label: 社長・事業責任者ひとり
+        name: single-approver
+      - label: 段階を踏む（部門長 → 役員）
+        name: staged-approval
+      - label: 投資委員会のような専門の審査の場
+        name: investment-committee
+    affects:
+      - session.goal
+    decided_by: user
+    note: '決め方はD31で具体化: 経営会議の場で話し合い、議長が決める'
+  - id: D4
+    topic: 人が必ず関わる場面
+    chosen: all-four-touchpoints
+    options:
+      - name: all-four-touchpoints
+        label: アイデア出し・提出前の中身確認・最終承認・AIが迷ったときの相談、の4場面すべて
+        adopted: true
+        why: AIエージェントに広く任せても、何をやりたいかの意思、提出する中身への責任、最終判断、AIが迷ったときの判断は人に残す（質問への回答で4つすべてを選択）
+      - name: idea-and-final-approval-only
+        label: アイデア出しと最終承認だけ
+        note: 進行役が仮のおすすめとして示した案
+    affects:
+      - session.goal
+    decided_by: user
+  - id: D5
+    topic: 計画書づくりが始まるきっかけ
+    chosen: agent-proposes-opportunity
+    options:
+      - name: agent-proposes-opportunity
+        label: AIエージェントが機会を見つけて提案する
+        adopted: true
+        why: 市場や社内の情報からAIエージェントが事業機会を言い出すところから流れを始めたい
+      - name: proposer-requests
+        label: 起案者が思いついてAIエージェントに頼む
+      - name: executive-directive
+        label: 経営から「このテーマで」と指示が出る
+    affects:
+      - narratives
+    decided_by: user
+    note: D4（狙いは人が出す）との関係はD9で確認済み。機会はAIが見つけ、狙いは人が書き足す
+  - id: D6
+    topic: 一次判定が基準に届かないときの扱い
+    chosen: escalate-with-result
+    options:
+      - name: escalate-with-result
+        label: 判定結果を添えて、そのまま経営会議に上げる
+        adopted: true
+        why: 基準に届かなくても、やるかどうかの最終判断は人（経営会議）に委ねる
+      - name: agent-self-revise
+        label: AIエージェントが自分で直して、もう一度判定する
+      - name: return-to-proposer
+        label: 起案者に戻して、どうするか決めてもらう
+    affects:
+      - narratives.alt-below-criteria
+    decided_by: user
+    note: 'D24で補足: 上げるかどうかは起案者が判定結果を見て決める。AIエージェントが自分で直して再判定しない点と、届かなくても上げられる点は変わらない'
+  - id: D7
+    topic: 経営会議の結論の種類
+    chosen: four-outcomes
+    options:
+      - name: four-outcomes
+        label: 承認・却下・条件つき承認・差し戻しの4種類
+        adopted: true
+        why: 白黒だけでなく、条件を付けて進める場合と、直して出し直す場合がある（質問への回答で4つすべてを選択）
+      - name: approve-or-reject-only
+        label: 承認と却下の2種類だけ
+    affects:
+      - narratives.alt-returned
+      - narratives.alt-conditional
+      - narratives.alt-rejected
+    decided_by: user
+  - id: D8
+    topic: AIエージェントが人に相談する条件
+    chosen: four-escalation-conditions
+    options:
+      - name: four-escalation-conditions
+        label: データ不足・前提で結論が変わる・指摘どうしの衝突・方針に合うか不明、の4つ
+        adopted: true
+        why: 根拠が取れない、前提次第で採算がひっくり返る、指摘が両立しない、やってよい事業か微妙、のどれもAIだけで決めさせたくない（質問への回答で4つすべてを選択）
+      - name: data-and-policy-only
+        label: データ不足と方針に合うか不明のときだけ
+    affects:
+      - narratives.happy
+    decided_by: user
+  - id: D9
+    topic: AIエージェントの機会提案に対する人の関わり方
+    chosen: human-selects-and-adds-aim
+    options:
+      - name: human-selects-and-adds-aim
+        label: 人が提案を選び、狙いを書き足してから始める
+        adopted: true
+        why: 機会はAIエージェントが見つけるが、何をやりたいかは人が決める。D4（狙いは人が出す）とD5（きっかけはAIの提案）の両方が成り立つ
+      - name: human-selects-only
+        label: 人は提案を選ぶだけ（狙いもAIの案のまま）
+      - name: both-origins
+        label: AIの提案から始まる場合と、人のアイデアから始まる場合の両方ある
+    affects:
+      - narratives.happy
+    decided_by: user
+  - id: D10
+    topic: AIエージェントのレビューで見る観点
+    chosen: four-perspectives-without-risk-legal
+    options:
+      - name: four-perspectives-without-risk-legal
+        label: 市場・顧客／収支・数字／実行体制／会社の戦略との整合 の4観点
+        adopted: true
+        why: 買う人がいるか、数字の筋が通るか、やれる体制か、自社がやる理由があるか、をAIエージェントのレビューで見る（回答者がいったん5観点を選んだあと、リスク・法務を外して選び直した）
+      - name: five-perspectives-with-risk-legal
+        label: 上の4観点に、リスク・法務を加えた5観点
+        why_not: 回答者が選び直しで外した。リスク・法務は今回の整理の対象外（D13）
+    affects:
+      - narratives.happy
+    decided_by: user
+  - id: D11
+    topic: 条件つき承認の条件を満たしたかを確かめる人
+    chosen: assigned-approver
+    options:
+      - name: assigned-approver
+        label: 承認者のうち担当のひとりが確かめる
+        adopted: true
+        why: 会議を開き直さずに、会議から任された人が責任を持って確かめる
+      - name: agent-verifies-and-reports
+        label: AIエージェントが確かめて、経営会議に報告する
+      - name: executive-meeting-rechecks
+        label: 経営会議がもう一度確かめる
+    affects:
+      - narratives.alt-conditional
+      - aggregates.ApprovalCase
+    decided_by: user
+  - id: D12
+    topic: 差し戻し後の出し直しの回数
+    chosen: limited-count
+    options:
+      - name: limited-count
+        label: 回数に上限がある（5回まで）
+        adopted: true
+        why: 出し直しが際限なく続かないよう、5回で区切る（回数は回答者の記入）
+      - name: unlimited
+        label: 何度でも出し直せる
+      - name: deadline
+        label: 期限で区切る
+    affects:
+      - narratives.alt-returned
+      - aggregates.ApprovalCase
+      - scenarios.経営会議が最終判断する
+    decided_by: user
+    note: 上限に達したあとの扱いはD14で決定（審議はするが差し戻しは選べない）
+  - id: D13
+    topic: リスク・法務の観点の扱い
+    chosen: out-of-scope
+    options:
+      - name: out-of-scope
+        label: 今回の整理の対象から外す
+        adopted: true
+        why: まず計画書の作成・レビュー・承認の流れを固めることを優先し、リスク・法務の確認は今回のモデルでは扱わない
+      - name: human-specialist-review
+        label: 法務など専門の人が別に見る
+      - name: executive-meeting-covers
+        label: 経営会議が最終判断の中で見る
+      - name: after-approval
+        label: 承認のあと、事業を始める前に見る
+    affects:
+      - session.goal
+    decided_by: user
+  - id: D14
+    topic: 差し戻しが上限（5回）に達したあとの扱い
+    chosen: must-decide-at-last
+    options:
+      - adopted: true
+        label: 審議はする。ただし差し戻しはもう選べない（承認・条件つき承認・却下のどれかに決める）
+        name: must-decide-at-last
+        why: 5回直してきた起案は、内容が良くなっていれば承認されるべきなので審議する。ただし差し戻しを続けると終わらないので、最後は必ず決着させる
+      - label: 審議せず、自動で却下になる
+        name: auto-reject
+        why_not: 審議なしで却下すると、内容が良くなっていても通らない。確認の質問への回答で不採用（自動で却下 → 審議はする）
+      - label: 5回目の差し戻しそのものができない（差し戻せるのは4回まで）
+        name: no-fifth-return
+      - label: 起案者が取り下げる
+        name: proposer-withdraws
+    affects:
+      - narratives.alt-returned
+      - aggregates.ApprovalCase
+    decided_by: user
+    note: 確認の質問への回答で付け替えた（自動で却下 → 審議はするが差し戻しは選べない）。最初の回答「却下として終わる」は、審議なしの自動却下とも読めたため確かめた
+  - id: D15
+    topic: AIエージェントからの相談に答える人
+    chosen: specialist
+    options:
+      - name: specialist
+        label: 専門の担当者（財務や事業企画など、詳しい人）
+        adopted: true
+        why: AIエージェントが迷うのはデータや前提、方針の解釈など専門的な点なので、起案者ではなく詳しい人に答えてもらう
+      - name: always-proposer
+        label: いつも起案者
+      - name: depends-on-content
+        label: 内容によって違う（方針に関わることは経営側、それ以外は起案者）
+    affects:
+      - scenarios.専門の担当者が相談に答える
+    decided_by: user
+  - id: D16
+    topic: 提出前に起案者が「これでは出せない」と思ったときの手段
+    chosen: request-revision-or-withdraw
+    options:
+      - name: request-revision-or-withdraw
+        label: AIエージェントに直しを頼む、または起案そのものを取り下げる
+        adopted: true
+        why: 計画書を整える作業はAIエージェントに任せる方針（D1）なので、起案者は直してほしい点を伝えるか、やめるかを決める
+      - name: proposer-rewrites
+        label: 起案者が自分で書き直す
+    affects:
+      - scenarios.起案者がAIエージェントに直しを頼む
+      - scenarios.起案者が起案を取り下げる
+      - narratives.alt-withdrawn
+    decided_by: user
+  - id: D17
+    topic: 経営会議に上げるとき、計画書と一緒に渡すもの
+    chosen: full-package
+    options:
+      - name: full-package
+        label: 一次判定の結果・レビューの指摘と直した履歴・人に相談した記録・要約の4つすべて
+        adopted: true
+        why: 最終判断をする経営会議が、AIエージェントが何を判定し、何を直し、何に迷ったかまで確かめられるようにする（質問への回答で4つすべてを選択）
+      - name: judgment-and-summary-only
+        label: 一次判定の結果と要約だけ
+    affects:
+      - scenarios.起案者が判定結果を見て経営会議に上げる
+    decided_by: user
+  - id: D18
+    topic: 一次判定の基準を決める人
+    chosen: executive-meeting-predefines
+    options:
+      - name: executive-meeting-predefines
+        label: 経営会議があらかじめ決めておく
+        adopted: true
+        why: 最終判断をする経営会議自身が基準を持ち、どの起案にも同じ基準でAIエージェントに一次判定させる
+      - name: planning-department-defines
+        label: 事業企画などの担当部署が決める
+      - name: per-proposal
+        label: 起案ごとに変わる
+    affects:
+      - scenarios.経営会議が一次判定の基準を定める
+      - scenarios.AIエージェントが一次判定する
+      - aggregates.PreliminaryJudgmentCriteria
+    decided_by: user
+  - id: D19
+    topic: 作るAIエージェントと、レビュー・一次判定をするAIエージェントの分け方
+    chosen: separate-drafting-and-review
+    options:
+      - name: separate-drafting-and-review
+        label: 別々にする（作る担当と、レビュー・一次判定の担当の2つ）
+        adopted: true
+        why: 作った本人が自分の計画書を甘く見ないように、作る役とチェックする役を分ける
+      - name: single-agent
+        label: 同じAIエージェントが全部やる
+      - name: three-agents
+        label: 作る・レビュー・一次判定の3つとも別々にする
+    affects:
+      - contexts.review
+      - contexts.approval
+    decided_by: user
+    note: 機会を探すAIエージェントも別にする、とD26で決定。AIエージェントは「探す」「作る」「レビュー・一次判定」の3つ
+  - id: D20
+    topic: 直したあとの再レビュー
+    chosen: loop-with-limit
+    options:
+      - name: loop-with-limit
+        label: 繰り返すが、回数に上限がある
+        adopted: true
+        why: 指摘がなくなるまで直させたいが、AIエージェントどうしで際限なく回り続けないよう区切る
+      - name: loop-until-clean
+        label: 指摘がなくなるまで繰り返す
+      - name: single-pass
+        label: 1回直したら、起案者の確認に進む
+    affects:
+      - scenarios.AIエージェントが指摘を受けて計画書を直す
+      - scenarios.AIエージェントが計画書をレビューする
+    decided_by: user
+    note: 上限の回数と、上限に達したあとの扱いはD23で決定
+  - id: D21
+    topic: 一次判定が済んだ計画書が経営会議に上がるタイミング
+    chosen: proposer-escalates-after-seeing-result
+    options:
+      - adopted: true
+        label: 起案者が判定結果を見てから上げる
+        name: proposer-escalates-after-seeing-result
+        why: 経営会議に出すかどうかは起案者が決める（D24）ので、判定結果を見てから上げる。自動で上げると、起案者が直す・取り下げる機会がなくなる
+      - label: 判定が済んだらすぐ、自動で上がる
+        name: auto-escalate
+      - label: 会議の日程に合わせて、まとめて上がる
+        name: batch-by-meeting-schedule
+    affects:
+      - scenarios.起案者が判定結果を見て経営会議に上げる
+    decided_by: user
+    note: '起案者が上げない選択（直す・取り下げる）もできる、とD24で決定'
+  - id: D22
+    topic: 経営会議の結論を知らせる相手
+    chosen: proposer-only
+    options:
+      - adopted: true
+        label: 起案者だけ
+        name: proposer-only
+        why: 結論を受けて次に動くのは起案者なので、仕組みから知らせる相手は起案者に限る
+      - label: 相談に答えた専門の担当者にも知らせる
+        name: include-specialists
+      - label: 関係する部署にも知らせる
+        name: include-related-departments
+      - label: 全社に知らせる
+        name: company-wide
+    affects:
+      - policies.NotifyProposerOfDecision
+    decided_by: user
+    note: 条件を満たしたと確かめられて承認が確定したとき、条件つき承認が取り消されたときも、同じく起案者に知らせる（進行役が意味チェックを受けて補った点）
+  - id: D23
+    topic: 直す→レビューの繰り返しの上限と、上限に達したあとの扱い
+    chosen: five-rounds-then-proposer-check
+    options:
+      - name: five-rounds-then-proposer-check
+        label: 5回まで。指摘が残っていたら、残った指摘を添えて起案者の確認に進む
+        adopted: true
+        why: AIエージェントどうしで決着がつかないものは、残った指摘を見せたうえで起案者に判断してもらう（回数は回答者の選択）
+      - name: consult-specialist
+        label: 上限に達したら専門の担当者に相談する
+      - name: stop-and-withdraw
+        label: 上限に達したらそこで止めて、起案を取り下げる
+    affects:
+      - scenarios.AIエージェントが指摘を受けて計画書を直す
+      - scenarios.AIエージェントが計画書をレビューする
+      - scenarios.起案者が中身を確かめて提出する
+    decided_by: user
+  - id: D24
+    topic: 一次判定の結果を見た起案者ができること
+    chosen: escalate-revise-or-withdraw
+    options:
+      - name: escalate-revise-or-withdraw
+        label: そのまま上げる・直しを頼む・取り下げる、を起案者が選ぶ
+        adopted: true
+        why: 経営会議に出すかどうかは起案者の意思で決める。基準に届かなくても上げることはでき（D6）、直してから出し直すことも、やめることもできる
+      - name: must-escalate
+        label: 必ず上げる（起案者は結果を見て把握するだけ）
+      - name: escalate-or-revise
+        label: 上げるか、直しを頼むかを選ぶ（取り下げはできない）
+    affects:
+      - scenarios.起案者が判定結果を見て経営会議に上げる
+      - narratives.alt-below-criteria
+    decided_by: user
+  - id: D25
+    topic: 今回整理する流れの終点
+    chosen: end-at-notification
+    options:
+      - name: end-at-notification
+        label: 起案者に結論が知らされたところで終わり
+        adopted: true
+        why: 計画書の作成・レビュー・承認に絞り、承認のあとの立ち上げ準備や予算は今回扱わない
+      - name: until-launch-preparation
+        label: 事業の立ち上げ準備が始まるところまで
+      - name: until-budget-secured
+        label: 予算が確保されるところまで
+    affects:
+      - policies.NotifyProposerOfDecision
+      - session.goal
+    decided_by: user
+  - id: D26
+    topic: 機会を探すAIエージェントと、計画書を作るAIエージェントの分け方
+    chosen: separate-scout
+    options:
+      - name: separate-scout
+        label: 別にする
+        adopted: true
+        why: 探す担当はふだんから動き続け、作る担当は起案ごとに動く。動き方が違うので分ける
+      - name: same-agent
+        label: 同じにする（探した本人がそのまま計画書も作る）
+    affects:
+      - contexts.opportunity
+      - contexts.planning
+    decided_by: user
+  - id: D27
+    topic: 相談の答えを待つあいだのAIエージェントの動き
+    chosen: wait-until-answered
+    options:
+      - name: wait-until-answered
+        label: 答えが出るまで止めて待つ
+        adopted: true
+        why: 迷っている点を抱えたまま計画書を先に進めない。答えが出るまで提出もできない
+      - name: continue-unrelated-parts
+        label: 相談と関係ない部分は進める
+      - name: provisional-assumption-after-deadline
+        label: 期限までに答えがなければ、仮の前提を置いて進める
+    affects:
+      - scenarios.AIエージェントが計画書の下書きを作る
+      - scenarios.AIエージェントが指摘を受けて計画書を直す
+      - aggregates.Consultation
+      - aggregates.BusinessPlan
+    decided_by: user
+  - id: D28
+    topic: 取り下げた起案・却下された起案の出し直し
+    chosen: resubmit-as-new-proposal
+    options:
+      - name: resubmit-as-new-proposal
+        label: 新しい起案としてなら出し直せる
+        adopted: true
+        why: 終わった起案は記録として残し、やり直すときは別の起案として最初から始める
+      - name: reopen-same-proposal
+        label: 同じ起案を再開できる
+      - name: no-resubmission
+        label: 出し直せない
+    affects:
+      - scenarios.起案者が起案を取り下げる
+      - scenarios.経営会議が最終判断する
+    decided_by: user
+  - id: D29
+    topic: 起案者が提出できる計画書の条件
+    chosen: reviewed-aim-and-acknowledged-findings
+    options:
+      - name: reviewed-aim-and-acknowledged-findings
+        label: レビューを1回以上受けている／狙いが書かれている／残った指摘は起案者が見たうえで出す
+        adopted: true
+        why: AIのチェックを通っていること、起案者の意思が入っていること、残った問題を起案者が承知していることを提出の条件にする
+      - name: also-no-pending-consultation
+        label: 上の3つに加えて、答え待ちの相談が残っていない
+        note: この質問では選ばれなかったが、確認の結果「相談中は提出できない」と決まった（D33）。提出の条件は合わせて4つ
+    affects:
+      - scenarios.起案者が中身を確かめて提出する
+    decided_by: user
+  - id: D30
+    topic: いちばん「自社ならでは」の工夫を込める領域
+    chosen: opportunity
+    options:
+      - name: opportunity
+        label: 機会の提案
+        adopted: true
+        why: どんな事業機会を見つけるかに、自社ならではの工夫を込めたい
+      - name: planning
+        label: 計画書の作成
+      - name: review
+        label: レビューと一次判定
+      - name: approval
+        label: 承認
+    affects:
+      - domains
+      - contexts.opportunity
+    decided_by: user
+    note: 残りの3領域の位置づけはD34で決定（計画書の作成だけ、ありものの仕組みで済ませる）
+  - id: D31
+    topic: 経営会議での最終判断の決め方
+    chosen: chair-decides
+    options:
+      - name: chair-decides
+        label: 議長（社長など）が意見を聞いて決める
+        adopted: true
+        why: 話し合いはするが、新規事業を始める責任はひとりの決裁者が負う
+      - name: unanimous
+        label: 全員一致
+      - name: majority
+        label: 過半数
+    affects:
+      - scenarios.経営会議が最終判断する
+    decided_by: user
+  - id: D32
+    topic: 一次判定の結果の出し方
+    chosen: binary-per-criterion
+    options:
+      - name: binary-per-criterion
+        label: 基準ごとに「満たす・届かない」の2択
+        adopted: true
+        why: 判定を単純にし、1つでも届かなければ全体も「届かない」とはっきり示す
+      - name: score-per-criterion
+        label: 基準ごとに点数を付け、合計点で判定する
+      - name: binary-with-reason
+        label: 基準ごとに「満たす・届かない」と理由を付ける
+    affects:
+      - scenarios.AIエージェントが一次判定する
+      - aggregates.PreliminaryJudgment
+    decided_by: user
+  - id: D33
+    topic: 答え待ちの相談が残っている計画書の提出
+    chosen: cannot-submit
+    options:
+      - name: cannot-submit
+        label: 提出できない
+        adopted: true
+        why: 迷っている点が解決し、AIエージェントが続きを終えてから出す。D27（答えが出るまで止めて待つ）とそろえる
+      - name: can-submit
+        label: 提出できる（起案者の判断で相談を打ち切って出せる）
+      - name: never-happens
+        label: そもそも起きない（条件にする必要がない）
+    affects:
+      - scenarios.起案者が中身を確かめて提出する
+      - aggregates.BusinessPlan
+      - aggregates.Consultation
+    decided_by: user
+  - id: D34
+    topic: ありものの仕組みで済ませたい領域
+    chosen: planning-only
+    options:
+      - adopted: true
+        label: 計画書の作成だけ
+        name: planning-only
+        why: 調査・試算・文章化は既製の仕組みで済ませる。レビューと一次判定は自社の基準で見極め、承認は自社の経営会議の決め方に合わせる必要がある
+      - label: 計画書の作成・レビューと一次判定・承認の3つとも
+        name: all-three-off-the-shelf
+        why_not: レビューと一次判定は自社の基準で見極める必要があり、承認は自社の経営会議の決め方に合わせる必要があるので、既製の仕組みでは済まない
+      - label: 承認だけ
+        name: approval-only
+        note: 進行役の仮置きだった案
+      - label: どれも自社向けに作り込む
+        name: none
+    affects:
+      - domains
+      - contexts.planning
+      - contexts.review
+      - contexts.approval
+    decided_by: user
+    note: 回答者がヒントを見たうえで選び直した（3つとも → 計画書の作成だけ）。レビューと一次判定・承認は、差別化はしないが自社向けに作り込む位置づけ
+  - id: D35
+    topic: 記録していく「もの」の分け方
+    chosen: seven-records
+    options:
+      - adopted: true
+        label: 事業機会／事業計画書／相談／レビュー／一次判定／一次判定の基準／承認案件の7つ
+        name: seven-records
+        note: 進行役の下書きを回答者が確認し、この分け方で合っているとした
+        why: レビューは繰り返し行う（D20）が一次判定は提出のたびに1回／基準は起案より先に経営会議が決める（D18）／経営会議の結論と出し直しの回数は計画書の中身とは別に進む（D7・D12）／相談は答えが出るまで計画書を止める別の用件（D27）なので、それぞれ別の記録にする
+      - label: まとめたいものがある
+        name: merge-some
+      - label: 足りないものがある
+        name: add-more
+    affects:
+      - aggregates
+    decided_by: user
+  - id: D36
+    topic: 条件つき承認の条件に付ける期限
+    chosen: always-deadline
+    options:
+      - name: always-deadline
+        label: 必ず期限を付ける（期限までに満たせなければ承認は取り消し）
+        adopted: true
+        why: 条件が満たされないまま、承認されたのかどうか分からない状態が続くのを防ぐ
+      - name: no-deadline
+        label: 期限は付けない（満たすまで待つ）
+      - name: case-by-case
+        label: 経営会議がそのつど決める
+    affects:
+      - aggregates.ApprovalCase
+      - policies.RevokeConditionalApprovalWhenDeadlinePasses
+      - narratives.alt-conditional
+    decided_by: user
+  - id: D37
+    topic: 進み具合を確かめる一覧
+    chosen: status-and-pending-consultations
+    options:
+      - name: status-and-pending-consultations
+        label: 起案の一覧と今の状態／答え待ちの相談の一覧
+        adopted: true
+        why: 起案がどこで止まっているかと、人の答えを待っている相談を見えるようにする
+      - name: also-meeting-and-opportunity-lists
+        label: 加えて、経営会議に上がっている起案の一覧／AIが提案した機会の一覧
+    affects:
+      - queries.ProposalStatusList
+      - queries.PendingConsultationList
+    decided_by: user
+  - id: D38
+    topic: 専門の担当者が相談になかなか答えないときの扱い
+    chosen: remind-specialist
+    options:
+      - name: remind-specialist
+        label: 担当者に催促する（一定の期間が過ぎたら自動で知らせる）
+        adopted: true
+        why: 答えが出るまでAIエージェントは止まって待つ（D27）ので、止まったままにならないよう担当者に気づかせる
+      - name: do-nothing
+        label: 何もしない（答えが出るまで待ち続ける）
+      - name: notify-proposer
+        label: 起案者に知らせる
+      - name: reassign
+        label: 別の担当者に回す
+    affects:
+      - policies.RemindSpecialistOfPendingConsultation
+    decided_by: user
+    note: 催促するまでの期間は1週間（回答者の選択）
+  - id: D39
+    topic: 経営会議に上げたあと、結論が出る前の取り下げ
+    chosen: cannot-withdraw
+    options:
+      - name: cannot-withdraw
+        label: 取り下げられない（上げたら、経営会議の結論を待つ）
+        adopted: true
+        why: 経営会議に上げた起案は、結論が出るまで起案者の手を離れる
+      - name: can-withdraw
+        label: 取り下げられる（結論が出る前ならいつでも）
+    affects:
+      - scenarios.起案者が起案を取り下げる
+      - aggregates.BusinessPlan
+      - aggregates.ApprovalCase
+      - invariants.WithdrawnPlanIsNeverApproved
+    decided_by: user
+    note: 差し戻されたあと（出し直す前）は取り下げられる、と本人に確認済み
+  - affects:
+      - aggregates.PreliminaryJudgmentCriteria
+      - scenarios.AIエージェントが一次判定する
+      - scenarios.経営会議が一次判定の基準を定める
+    chosen: new-criteria-from-next-submission
+    decided_by: user
+    id: D40
+    options:
+      - adopted: true
+        label: 改めたあとに提出された計画書から、新しい基準を使う（判定済みの結果は変えない）
+        name: new-criteria-from-next-submission
+        why: すでに出た判定をあとから覆さず、これから出される計画書にだけ新しい基準を当てる
+      - label: 起案が始まったときの基準を最後まで使う
+        name: criteria-fixed-at-start
+      - label: 進行中の起案もすべて、新しい基準で判定し直す
+        name: rejudge-all
+    topic: 一次判定の基準を改めたとき、進行中の起案に使う基準
+  - affects:
+      - policies.RemindSpecialistOfPendingConsultation
+      - aggregates.Consultation
+    chosen: repeat-reminder
+    decided_by: user
+    id: D41
+    note: 'この決め方では、担当者が答えないかぎり起案は止まったままになる（AIエージェントは待ち、提出もできない: D27・D33）。仕組みの側から相談を終わらせる手段は無い。モデル検査でも確認済み。起案者は取り下げることはできる'
+    options:
+      - adopted: true
+        label: 1週間ごとに催促を繰り返す（答えが出るまで待つ）
+        name: repeat-reminder
+        why: 答える人を変えたり起案者に判断を戻したりせず、同じ担当者の答えを待つ
+      - label: 起案者に知らせて、どうするか決めてもらう
+        name: notify-proposer
+      - label: 別の担当者に回す
+        name: reassign
+      - label: 今回は決めない
+        name: undecided
+    topic: 催促しても専門の担当者から答えが出ないときの扱い
+questions:
+  - id: Q1
+    topic: AIエージェントが機会を提案したあと、人はどう関わって計画書づくりが始まるか
+    why: 「きっかけはAIの提案」（D5）と「アイデア・狙いは人が出す」（D4）の両方が選ばれており、出発点での人とAIの役割分担が決まっていない
+    status: closed
+    note: 「人が提案を選び、狙いを書き足してから始める」と回答があり解決
+    decision_id: D9
+  - id: Q2
+    topic: リスク・法務の観点は、誰がどこで見るか
+    why: AIエージェントのレビュー観点からリスク・法務が外された（D10）。見ないのか、別の人や場が見るのかで流れが変わる
+    status: closed
+    note: 「今回の整理の対象から外す」と回答があり解決
+    decision_id: D13
+  - id: Q3
+    topic: 出し直しが上限（5回）に達したあと、起案はどうなるか
+    why: 上限を決めた（D12）が、達したあとの終わらせ方が決まっていない
+    status: closed
+    note: 「却下として終わる」と回答があり解決
+    decision_id: D14
+  - id: Q4
+    topic: 直す→レビューの繰り返しは何回までか。上限に達したらどうするか
+    why: 上限ありと決めた（D20）が、回数の記入がなく、達したあとの進み方も決まっていない
+    status: closed
+    note: 「5回まで」「残った指摘を添えて起案者の確認に進む」と回答があり解決
+    decision_id: D23
+  - id: Q5
+    topic: 起案者が一次判定の結果を見たとき、経営会議に上げずに直す・取り下げることはできるか
+    why: 「基準に届かなくてもそのまま経営会議に上げる」（D6）と「起案者が判定結果を見てから上げる」（D21）の両方が選ばれており、起案者に上げない選択肢があるかが決まっていない
+    status: closed
+    note: 「上げずに、直すことも取り下げることもできる」と回答があり解決
+    decision_id: D24
+  - id: Q6
+    topic: 答え待ちの相談が残っている計画書を、起案者は提出できるか
+    why: 提出の条件として「答え待ちの相談が残っていない」は選ばれなかった（D29）が、「相談の答えが出るまでAIエージェントは止めて待つ」（D27）とも決めており、食い違って見える
+    status: closed
+    note: 「提出できない」と回答があり解決
+    decision_id: D33
+  - id: Q7
+    topic: 計画書の作成・レビューと一次判定・承認のうち、ありものの仕組みで済ませる領域はどれか
+    why: いったん3つともと回答があった（D34）が、回答者が選び直してヒントを求めたため、まだ確定していない
+    status: closed
+    note: ヒントを見たうえで「計画書の作成」だけと回答があり解決
+    decision_id: D34
+  - id: Q8
+    topic: 相談が出されてから、専門の担当者に催促するまでの期間はどれくらいか
+    why: 催促すると決めた（D38）が、期間の長さは業務の前提を左右する値なので進行役が決めず、確認する
+    status: closed
+    note: 「1週間」と回答があり解決
+    decision_id: D38
+  - id: Q9
+    note: 「審議はする。ただし差し戻しはもう選べない」と回答があり解決
+    status: closed
+    topic: 5回差し戻した起案がもう一度上がってきたとき、経営会議は審議するのか、自動で却下になるのか
+    why: 「出し直しは5回まで、超えたら却下」（D12・D14）の数え方が二通りに読める。審議なしの自動却下だと、内容が良くなっていても却下になる
+    decision_id: D14
+  - id: Q10
+    note: 「改めたあとに提出された計画書から、新しい基準を使う」と回答があり解決
+    status: closed
+    topic: 経営会議が一次判定の基準を改めたとき、進行中の起案にはどちらの基準を使うか
+    why: どの起案にも同じ基準を使う（D18）と決めたが、基準を改めた時点で作成中・提出済みの起案の扱いが決まっていない
+    decision_id: D40
+  - id: Q11
+    note: 「取り下げられない」と回答があり解決
+    status: closed
+    topic: 経営会議に上げたあと、結論が出る前に、起案者は起案を取り下げられるか
+    why: 提出前と一次判定のあと（D16・D24）の取り下げは決まっているが、経営会議に上げたあとの取り下げが決まっていない
+    decision_id: D39
+  - id: Q12
+    note: '「1週間ごとに催促を繰り返す」と回答があり解決。答えが出ないかぎり起案が止まり続ける点は、D41のnoteに記録'
+    status: closed
+    topic: 催促しても専門の担当者から答えが出ないとき、どうするか
+    why: 答えが出るまでAIエージェントは止まり、提出もできない（D27・D33）。催促（D38）のあとも答えが出ないと、起案が止まったままになる
+    decision_id: D41
+narratives:
+  - id: happy
+    kind: happy
+    title: ハッピーパス — AIの機会提案から経営会議の承認まで
+    prose: "AIエージェントが市場や社内の情報から新規事業の機会を見つけ、提案する。起案者は提案の中から取り上げるものを選び、何をやりたいかの狙いを書き足す。ここから計画書づくりが始まる。\nAIエージェントは調査・数字の試算・文章化を行い、事業計画書の下書きを作る。続けてAIエージェントがレビューし、抜け・矛盾・根拠の弱さを指摘する。指摘を受けてAIエージェントが修正版を出す。\n途中で、根拠になるデータが見つからない、前提の置き方で結論が大きく変わる、指摘どうしがぶつかる、会社の方針に合うか判断できない、のいずれかに当たったら、AIエージェントは人に相談し、答えを受けて続きを進める。\n修正が済んだら、起案者が計画書の中身を確かめて提出する。AIエージェントが基準に照らして一次判定を行い、判定結果を添えて経営会議に上げる。経営会議は合議で最終判断し、承認する。\n"
+    entry: AIエージェントが事業機会を提案する
+  - id: alt-below-criteria
+    kind: alt
+    title: 代替シナリオ — 一次判定が基準に届かない
+    prose: "AIエージェントの一次判定が「基準に届かない」だった。AIエージェントは自分で直して再判定することはしない。起案者が判定結果を見て、(1) 届かなかった点を明記した判定結果を添えてそのまま経営会議に上げる、(2) AIエージェントに直しを頼んで出し直す、(3) 起案を取り下げる、のいずれかを選ぶ。上げた場合、最終判断は経営会議に委ねる。\n"
+    entry: 起案者がAIエージェントに直しを頼む
+  - id: alt-returned
+    kind: alt
+    title: 代替シナリオ — 経営会議が差し戻す
+    prose: "経営会議が計画書を差し戻した。AIエージェントが指摘を受けて直し、起案者が中身を確かめて出し直す。一次判定を経て、ふたたび経営会議に上がる。差し戻せるのは 5 回まで。5 回差し戻した起案がもう一度上がってきたら、経営会議は審議するが、差し戻しはもう選べず、承認・条件つき承認・却下のどれかに決める。\n"
+    entry: AIエージェントが指摘を受けて計画書を直す
+  - id: alt-conditional
+    kind: alt
+    title: 代替シナリオ — 条件つき承認
+    prose: "経営会議が条件つきで承認した。条件には必ず期限を付ける。条件を満たしたかどうかは、経営会議から任された担当の承認者ひとりが確かめる（会議は開き直さない）。期限までに満たしたと確かめられなければ、承認は取り消され、起案者に知らされる。\n"
+    entry: 担当の承認者が条件を満たしたか確かめる
+  - id: alt-rejected
+    kind: alt
+    title: 代替シナリオ — 経営会議が却下する
+    prose: "経営会議が計画書を却下した。起案は理由とともに記録され、そこで終わる。\n"
+    entry: 経営会議が最終判断する
+  - id: alt-withdrawn
+    kind: alt
+    title: 代替シナリオ — 起案者が提出前に取り下げる
+    prose: "起案者が計画書の中身を確かめて「これでは出せない」と判断した。AIエージェントに直しを頼んでも納得できる形にならないとき、起案者は起案そのものを取り下げ、提出せずに終わる。\n"
+    entry: 起案者が起案を取り下げる
+  - id: alt-consultation
+    kind: alt
+    title: 代替シナリオ — AIエージェントが判断に迷って相談する
+    entry: AIエージェントが判断に迷って人に相談する
+    prose: "計画書を作る・直す途中で、根拠になるデータが見つからない、前提の置き方で結論が大きく変わる、指摘どうしがぶつかる、会社の方針に合うか判断できない、のいずれかに当たった。AIエージェントは専門の担当者に相談し、答えを受けて続きを進める。\n"
+contexts:
+  - name: opportunity
+    label_ja: 機会の提案
+    lang:
+      actors:
+        ScoutAgent: 機会探索のAIエージェント
+        Proposer: 起案者
+      cmds:
+        SuggestOpportunity: 事業機会を提案する
+        SelectOpportunity: 狙いを添えて機会を選ぶ
+      evts:
+        OpportunitySuggested: 事業機会が提案された
+        OpportunitySelected: 機会が選ばれ狙いが定まった
+      aggs:
+        BusinessOpportunity: 事業機会
+      states:
+        SUGGESTED: 提案された
+        SELECTED: 選ばれた
+      vos:
+        Aim: 狙い（起案者が書き足す、何をやりたいか）
+    up: []
+    dn:
+      - ctx: planning
+        rel: Upstream-Downstream
+        note: 選ばれた機会と狙いが、計画書づくりの出発点になる
+    sub: opportunity-discovery
+    aggs:
+      - BusinessOpportunity
+  - name: planning
+    label_ja: 計画書の作成
+    lang:
+      actors:
+        DraftingAgent: 計画書作成のAIエージェント
+        Proposer: 起案者
+        Specialist: 専門の担当者
+      cmds:
+        DraftPlan: 計画書の下書きを作る
+        RevisePlan: 指摘を受けて計画書を直す
+        RequestConsultation: 人に相談する
+        AnswerConsultation: 相談に答える
+        SubmitPlan: 中身を確かめて提出する
+        RequestRevision: 起案者が計画書の直しを頼む
+        WithdrawPlan: 起案を取り下げる
+      evts:
+        PlanDrafted: 計画書の下書きができた
+        PlanRevised: 計画書の修正版ができた
+        ConsultationRequested: 相談が出された
+        ConsultationAnswered: 相談に答えが出た
+        PlanSubmitted: 計画書が提出された
+        RevisionRequested: 起案者から計画書の直しが頼まれた
+        PlanWithdrawn: 起案が取り下げられた
+        SpecialistReminded: 専門の担当者に催促が届いた
+      aggs:
+        BusinessPlan: 事業計画書
+        Consultation: 相談
+      states:
+        ANSWERED: 答えが出た
+        DRAFTED: 下書きができた
+        AWAITING_ANSWER: 相談中（答え待ち）
+        REVISED: 直された
+        SUBMITTED: 提出された
+        WITHDRAWN: 取り下げられた
+      qrys:
+        ProposalStatusList: 起案の一覧と今の状態
+        PendingConsultationList: 答え待ちの相談の一覧
+      pols:
+        RemindSpecialistOfPendingConsultation: 答えが出ない相談を担当者に催促する
+    up:
+      - ctx: opportunity
+        rel: Upstream-Downstream
+      - ctx: review
+        rel: Customer-Supplier
+        note: レビューの指摘を受けて計画書を直す
+    dn:
+      - ctx: review
+        rel: Customer-Supplier
+        note: 下書き・修正版・提出された計画書をレビューと一次判定に渡す
+    sub: plan-authoring
+    aggs:
+      - BusinessPlan
+      - Consultation
+  - name: review
+    label_ja: レビューと一次判定
+    lang:
+      actors:
+        ReviewAgent: レビューと一次判定のAIエージェント
+        ExecutiveMeeting: 経営会議
+      cmds:
+        ReviewPlan: 計画書をレビューする
+        JudgePlanPreliminarily: 基準に照らして一次判定する
+        DefinePreliminaryJudgmentCriteria: 一次判定の基準を定める
+      evts:
+        PlanReviewed: 計画書がレビューされた（指摘が出た）
+        PreliminaryJudgmentPassed: 一次判定で基準を満たした
+        PreliminaryJudgmentFailed: 一次判定で基準に届かなかった
+        PreliminaryJudgmentCriteriaDefined: 一次判定の基準が定められた
+      aggs:
+        PreliminaryJudgmentCriteria: 一次判定の基準
+        PlanReview: レビュー
+        PreliminaryJudgment: 一次判定
+      states:
+        DEFINED: 定められた
+        FAILED: 基準に届かなかった
+        FINDINGS_RAISED: 指摘が出た
+        PASSED: 基準を満たした
+    up:
+      - ctx: planning
+        rel: Customer-Supplier
+    dn:
+      - ctx: planning
+        rel: Customer-Supplier
+        note: 指摘を作成側に返す
+      - ctx: approval
+        rel: Upstream-Downstream
+        note: 一次判定の結果が最終判断の材料になる
+    sub: plan-assessment
+    aggs:
+      - PlanReview
+      - PreliminaryJudgment
+      - PreliminaryJudgmentCriteria
+  - name: approval
+    label_ja: 承認
+    lang:
+      actors:
+        ExecutiveMeeting: 経営会議
+        AssignedApprover: 担当の承認者
+        Proposer: 起案者
+        System: システム
+      cmds:
+        EscalateToExecutiveMeeting: 一次判定の結果を添えて経営会議に上げる
+        DecideOnPlan: 最終判断する
+        ConfirmConditionsMet: 条件を満たしたか確かめる
+        RevokeConditionalApproval: 条件つき承認を取り消す
+      evts:
+        PlanEscalated: 経営会議に上がった
+        PlanApproved: 承認された
+        PlanRejected: 却下された
+        PlanConditionallyApproved: 条件つきで承認された
+        PlanReturned: 経営会議が計画書を差し戻した
+        ConditionsConfirmed: 条件を満たしたと確かめられた
+        ProposerNotifiedOfDecision: 起案者に最終判断が知らされた
+        ConditionalApprovalRevoked: 条件つき承認が取り消された
+      pols:
+        NotifyProposerOfDecision: 最終判断が出たら起案者に知らせる
+        RevokeConditionalApprovalWhenDeadlinePasses: 期限までに条件を満たせなければ承認を取り消す
+      aggs:
+        ApprovalCase: 承認案件
+      states:
+        APPROVED: 承認された
+        CONDITIONALLY_APPROVED: 条件つきで承認された
+        CONDITIONS_CONFIRMED: 条件を満たしたと確かめられた
+        ESCALATED: 経営会議に上がった
+        REJECTED: 却下された
+        RETURNED: 差し戻された
+        CONDITIONAL_APPROVAL_REVOKED: 条件つき承認が取り消された
+    up:
+      - ctx: review
+        rel: Upstream-Downstream
+      - ctx: planning
+        rel: Upstream-Downstream
+        note: 計画書本体・修正の履歴・相談の記録を受け取る
+    dn: []
+    sub: approval-workflow
+    aggs:
+      - ApprovalCase
+scenarios:
+  - name: AIエージェントが事業機会を提案する
+    ctx: opportunity
+    actor: ScoutAgent
+    cmd: SuggestOpportunity
+    evt: OpportunitySuggested
+    next: 起案者が機会を選び狙いを書き足す
+    agg: BusinessOpportunity
+  - name: 起案者が機会を選び狙いを書き足す
+    ctx: opportunity
+    actor: Proposer
+    cmd: SelectOpportunity
+    evt: OpportunitySelected
+    pivotal: true
+    next: AIエージェントが計画書の下書きを作る
+    agg: BusinessOpportunity
+  - name: AIエージェントが計画書の下書きを作る
+    ctx: planning
+    actor: DraftingAgent
+    cmd: DraftPlan
+    evt: PlanDrafted
+    next: AIエージェントが計画書をレビューする
+    rules:
+      - rule: A draft is not completed while any consultation on the plan is unanswered
+        why: 専門の担当者の答えが出るまで、AIエージェントは作業を止めて待つ。仮の前提で先に進めない（D27）
+    agg: BusinessPlan
+  - name: AIエージェントが計画書をレビューする
+    ctx: review
+    actor: ReviewAgent
+    cmd: ReviewPlan
+    evt: PlanReviewed
+    next: AIエージェントが指摘を受けて計画書を直す
+    agg: PlanReview
+  - name: AIエージェントが指摘を受けて計画書を直す
+    ctx: planning
+    actor: DraftingAgent
+    cmd: RevisePlan
+    evt: PlanRevised
+    next: 起案者が中身を確かめて提出する
+    rules:
+      - rule: A plan is not revised while any consultation on it is unanswered
+        why: 専門の担当者の答えが出るまで、AIエージェントは作業を止めて待つ。仮の前提で先に進めない（D27）
+    agg: BusinessPlan
+  - name: AIエージェントが判断に迷って人に相談する
+    ctx: planning
+    actor: DraftingAgent
+    cmd: RequestConsultation
+    evt: ConsultationRequested
+    next: 専門の担当者が相談に答える
+    agg: Consultation
+    requires:
+      - agg: BusinessPlan
+        in:
+          - NONE
+          - DRAFTED
+          - REVISED
+  - name: 専門の担当者が相談に答える
+    ctx: planning
+    actor: Specialist
+    cmd: AnswerConsultation
+    evt: ConsultationAnswered
+    agg: Consultation
+    next: AIエージェントが指摘を受けて計画書を直す
+    note: 答えが出たら、止まっていたAIエージェントの作業（下書きまたは修正）が再開する
+  - name: 起案者が中身を確かめて提出する
+    ctx: planning
+    actor: Proposer
+    cmd: SubmitPlan
+    evt: PlanSubmitted
+    pivotal: true
+    next: AIエージェントが一次判定する
+    rules:
+      - rule: A plan is submitted only after it has been reviewed at least once
+        why: AIエージェントのレビューを一度も通っていない計画書は出せない（D29）
+      - rule: A plan is submitted only when the proposer aim is present
+        why: 起案者が書き足した狙いが残っていることが、起案者の計画である証になる（D29）
+      - rule: If review findings remain, the proposer must have acknowledged them before submitting
+        why: 指摘が残っていても出せるが、起案者が承知のうえで出す（D23・D29）
+      - rule: A plan is not submitted while any consultation on it is unanswered
+        why: 迷っている点に答えが出ないままの計画書は出せない（D27・D33）
+    errs:
+      - cond: the plan has never been reviewed
+        err: PlanNotReviewed
+        when: レビューを一度も受けていない計画書を提出しようとした
+      - cond: the proposer aim is missing
+        err: AimMissing
+        when: 狙いが書かれていない計画書を提出しようとした
+      - cond: remaining findings have not been acknowledged by the proposer
+        err: RemainingFindingsNotAcknowledged
+        when: 残った指摘を起案者が承知しないまま提出しようとした
+      - cond: an unanswered consultation exists for the plan
+        err: ConsultationPending
+        when: 答え待ちの相談が残っている計画書を提出しようとした
+    agg: BusinessPlan
+    requires:
+      - agg: Consultation
+        in:
+          - NONE
+          - ANSWERED
+  - name: AIエージェントが一次判定する
+    ctx: review
+    actor: ReviewAgent
+    cmd: JudgePlanPreliminarily
+    brs:
+      - cond: すべての基準を満たす
+        evt: PreliminaryJudgmentPassed
+      - cond: 基準に届かない点がある
+        evt: PreliminaryJudgmentFailed
+        next: 起案者が判定結果を見て経営会議に上げる
+        note: 起案者は判定結果を見て、そのまま上げるほかに、直しを頼む・取り下げることも選べる（D24）
+    next: 起案者が判定結果を見て経営会議に上げる
+    rules:
+      - rule: Each criterion is judged as either met or not met; the plan passes only if every criterion is met
+        why: 基準ごとに「満たす・届かない」の2択で判定し、1つでも届かなければ全体も「届かない」とする（D32）
+      - rule: Preliminary judgment uses the criteria in effect when the plan was submitted
+        why: 経営会議が基準を改めたら、改めたあとに提出された計画書から新しい基準を使う。判定済みの結果は変えない（D18・D40）
+    agg: PreliminaryJudgment
+    errs:
+      - cond: no preliminary judgment criteria have been defined
+        err: JudgmentCriteriaNotDefined
+        when: 経営会議が基準を定める前に一次判定しようとした
+    requires:
+      - agg: PreliminaryJudgmentCriteria
+        in:
+          - DEFINED
+  - name: 起案者が判定結果を見て経営会議に上げる
+    ctx: approval
+    actor: Proposer
+    cmd: EscalateToExecutiveMeeting
+    evt: PlanEscalated
+    note: '一次判定のあと、起案者が判定結果を見てから上げる（D21）。計画書と一緒に渡すもの: 一次判定の結果／レビューの指摘と直した履歴／AIエージェントが人に相談した記録／要約（D17）'
+    next: 経営会議が最終判断する
+    agg: ApprovalCase
+  - name: 経営会議が最終判断する
+    ctx: approval
+    actor: ExecutiveMeeting
+    cmd: DecideOnPlan
+    pivotal: true
+    brs:
+      - cond: 議長が、進めてよいと決めた
+        evt: PlanApproved
+      - cond: 議長が、条件を満たせば進めてよいと決めた
+        evt: PlanConditionallyApproved
+        next: 担当の承認者が条件を満たしたか確かめる
+      - cond: 議長が、直して出し直すよう求めた
+        evt: PlanReturned
+        next: AIエージェントが指摘を受けて計画書を直す
+      - cond: 議長が、進めないと決めた
+        evt: PlanRejected
+        terminal: alt-rejected
+    rules:
+      - rule: Only the chair makes the final decision; members' opinions are heard but not binding
+        why: 経営会議で話し合うが、決めるのは議長（社長など）ひとり。全員一致や多数決ではない（D31）
+      - rule: A conditional approval always carries a deadline for meeting the conditions
+        why: 条件が満たされないまま宙に浮かないよう、必ず期限を付ける（D36）
+      - rule: A proposal can be returned at most 5 times
+        why: 出し直しが際限なく続かないよう5回で区切る（D12）
+      - rule: Once a proposal has been returned 5 times, the decision is limited to approve, conditionally approve, or reject
+        why: 5回差し戻した起案がもう一度上がってきたら、審議はするが差し戻しはもう選べない。内容が良くなっていれば承認される（D14）
+      - rule: A rejected proposal is never reopened; resubmission requires a new proposal
+        why: 却下された起案は終わったまま残し、出し直すなら新しい起案として始める（D28）
+    agg: ApprovalCase
+    errs:
+      - cond: a conditional approval has no deadline for meeting the conditions
+        err: ConditionDeadlineMissing
+        when: 期限を付けずに条件つき承認しようとした
+      - cond: the proposal has already been approved or rejected
+        err: ProposalAlreadyDecided
+        when: 決着済みの起案をもう一度判断しようとした
+      - cond: the proposal has already been returned 5 times
+        err: ReturnLimitReached
+        when: 5回差し戻した起案をさらに差し戻そうとした
+  - name: 担当の承認者が条件を満たしたか確かめる
+    ctx: approval
+    actor: AssignedApprover
+    cmd: ConfirmConditionsMet
+    evt: ConditionsConfirmed
+    agg: ApprovalCase
+    rules:
+      - rule: Conditions can be confirmed only for a conditionally approved proposal and only before the deadline
+        why: 期限を過ぎた条件つき承認は取り消されるので、あとから満たしたことにはできない（D36）
+    errs:
+      - cond: the proposal is not conditionally approved
+        err: NotConditionallyApproved
+        when: 条件つき承認ではない起案の条件を確かめようとした
+      - cond: the conditional approval has already been revoked
+        err: ConditionalApprovalAlreadyRevoked
+        when: 取り消された条件つき承認の条件を確かめようとした
+  - name: 起案者がAIエージェントに直しを頼む
+    ctx: planning
+    actor: Proposer
+    cmd: RequestRevision
+    evt: RevisionRequested
+    note: 提出前に中身を確かめて「これでは出せない」と思ったとき。起案者は自分では書き直さない（D16）
+    next: AIエージェントが指摘を受けて計画書を直す
+    agg: BusinessPlan
+  - name: 起案者が起案を取り下げる
+    ctx: planning
+    actor: Proposer
+    cmd: WithdrawPlan
+    evt: PlanWithdrawn
+    rules:
+      - rule: A proposal cannot be withdrawn while it is before the executive meeting or after a final decision
+        why: 経営会議に上げたら、結論が出るまで取り下げられない（D39）。提出前、一次判定のあと、差し戻されたあとは取り下げられる
+      - rule: A withdrawn proposal is never reopened; resubmission requires a new proposal
+        why: 取り下げた起案は終わったまま残し、出し直すなら新しい起案として始める（D28）
+    agg: BusinessPlan
+    requires:
+      - agg: ApprovalCase
+        in:
+          - NONE
+          - RETURNED
+    errs:
+      - cond: the proposal is before the executive meeting and no decision has been made
+        err: ProposalUnderExecutiveReview
+        when: 経営会議に上げて結論を待っている起案を取り下げようとした
+      - cond: the proposal has already been approved or rejected
+        err: ProposalAlreadyDecided
+        when: 決着済みの起案を取り下げようとした
+  - name: 経営会議が一次判定の基準を定める
+    ctx: review
+    actor: ExecutiveMeeting
+    cmd: DefinePreliminaryJudgmentCriteria
+    evt: PreliminaryJudgmentCriteriaDefined
+    note: 起案ごとの流れの外で、あらかじめ行う準備。基準を改めるときも同じ操作。どの起案にも、提出した時点の基準を使う（D18・D40）
+    agg: PreliminaryJudgmentCriteria
+  - actor: System
+    agg: ApprovalCase
+    cmd: RevokeConditionalApproval
+    ctx: approval
+    errs:
+      - cond: the conditions have already been confirmed
+        err: ConditionsAlreadyConfirmed
+        when: 条件を満たしたと確かめられた承認を取り消そうとした
+    evt: ConditionalApprovalRevoked
+    name: システムが期限切れの条件つき承認を取り消す
+    rules:
+      - rule: A conditional approval is revoked only when its deadline has passed without the conditions being confirmed
+        why: 期限までに条件を満たしたと確かめられた承認は取り消さない（D36）
+policies:
+  - name: NotifyProposerOfDecision
+    ctx: approval
+    trgs:
+      evts:
+        - PlanApproved
+        - PlanConditionallyApproved
+        - PlanReturned
+        - PlanRejected
+        - ConditionsConfirmed
+        - ConditionalApprovalRevoked
+      mode: any
+    evt: ProposerNotifiedOfDecision
+    note: 経営会議の最終判断が出たとき、条件を満たしたと確かめられて承認が確定したとき、条件つき承認が取り消されたときに、起案者に知らせる（D22）
+  - name: RevokeConditionalApprovalWhenDeadlinePasses
+    ctx: approval
+    trg: PlanConditionallyApproved
+    within: 条件に付けた期限
+    cmd: RevokeConditionalApproval
+    evt: ConditionalApprovalRevoked
+    agg: ApprovalCase
+    note: 期限までに「条件を満たしたと確かめられた」が起きなければ、承認を取り消す（D36）。すでに確かめられていれば取り消さない
+  - name: RemindSpecialistOfPendingConsultation
+    ctx: planning
+    trg: ConsultationRequested
+    within: 1週間（答えが出るまで1週間ごとに繰り返す）
+    evt: SpecialistReminded
+    note: 相談が出されてから1週間、答えが出なければ、専門の担当者に自動で催促する。答えが出るまで1週間ごとに繰り返す（D38・D41）。すでに答えが出ている相談、取り下げられた起案の相談には催促しない
+domains:
+  - name: new-business-proposal
+    vision: AIエージェントが見つけた機会を、人の意思と経営会議の判断を通して新規事業の承認につなげる
+    subs:
+      - name: opportunity-discovery
+        type: CORE_SUBDOMAIN
+        vision: 自社ならではの事業機会を見つける
+      - name: plan-authoring
+        type: GENERIC_SUBDOMAIN
+      - name: plan-assessment
+        type: SUPPORTING_SUBDOMAIN
+      - name: approval-workflow
+        type: SUPPORTING_SUBDOMAIN
+aggregates:
+  - name: BusinessOpportunity
+    ctx: opportunity
+    purpose: AIエージェントが見つけた事業機会を、起案者が選んで狙いを定めるまで保持する
+    background: 計画書づくりの出発点は人のひらめきではなくAIエージェントの提案。ただし何をやりたいかの意思は人が加える
+    constraints:
+      - 狙いが書かれていない事業機会は、選ばれた状態にできない
+    states:
+      - SUGGESTED
+      - SELECTED
+    transitions:
+      - from: SUGGESTED
+        to: SELECTED
+        via: SelectOpportunity
+      - from: NONE
+        to: SUGGESTED
+        via: SuggestOpportunity
+    events:
+      - name: OpportunitySuggested
+      - name: OpportunitySelected
+    terminalStates:
+      - SELECTED
+  - name: BusinessPlan
+    ctx: planning
+    purpose: 起案から、提出後の直し・差し戻しを経て、取り下げまたは経営会議の結論が出るまで、事業計画書の中身と直した履歴を一貫して保つ
+    background: 計画書を整える作業はAIエージェントが行い、起案者は中身を確かめて出すか、直しを頼むか、取り下げるかを決める
+    constraints:
+      - 相談に答えが出るまで、下書きも修正も止める
+      - 直す→レビューの繰り返しは5回まで。残った指摘は添えて起案者の確認に進む
+      - レビューを1回以上受けていなければ提出できない
+      - 事業機会から引き継いだ狙いが残っていなければ提出できない
+      - 残った指摘を起案者が承知していなければ提出できない
+      - 答え待ちの相談が残っていれば提出できない
+      - 取り下げた起案は再開しない（出し直しは新しい起案）
+    states:
+      - DRAFTED
+      - REVISED
+      - SUBMITTED
+      - WITHDRAWN
+    terminalStates:
+      - WITHDRAWN
+    transitions:
+      - from: DRAFTED
+        to: REVISED
+        via: RevisePlan
+      - from: REVISED
+        to: REVISED
+        via: RevisePlan
+      - from: SUBMITTED
+        to: REVISED
+        via: RevisePlan
+        when: 一次判定の結果を見て直しを頼んだとき、または経営会議に差し戻されたとき
+      - from: DRAFTED
+        to: SUBMITTED
+        via: SubmitPlan
+      - from: REVISED
+        to: SUBMITTED
+        via: SubmitPlan
+      - from: DRAFTED
+        to: WITHDRAWN
+        via: WithdrawPlan
+      - from: REVISED
+        to: WITHDRAWN
+        via: WithdrawPlan
+      - from: SUBMITTED
+        to: WITHDRAWN
+        via: WithdrawPlan
+        when: 一次判定の結果を見て、経営会議に上げずにやめるとき
+      - from: NONE
+        to: DRAFTED
+        via: DraftPlan
+    events:
+      - name: PlanDrafted
+      - name: PlanRevised
+      - name: PlanSubmitted
+      - name: RevisionRequested
+      - name: PlanWithdrawn
+  - name: Consultation
+    ctx: planning
+    purpose: AIエージェントが判断に迷った点を専門の担当者に相談し、答えが出るまでを追って、問いと答えを後から確かめられる形で残す
+    background: 相談の記録は経営会議にも渡り、AIエージェントが何に迷い誰がどう答えたかを確かめられるようにする
+    constraints:
+      - 相談できるのは、データ不足・前提で結論が変わる・指摘どうしの衝突・方針に合うか不明、の4つの場合
+    states:
+      - AWAITING_ANSWER
+      - ANSWERED
+    terminalStates: []
+    transitions:
+      - from: AWAITING_ANSWER
+        to: ANSWERED
+        via: AnswerConsultation
+      - from: NONE
+        to: AWAITING_ANSWER
+        via: RequestConsultation
+      - from: ANSWERED
+        note: 検査上は相談を1件として扱うため、答えが出たあとの次の相談を同じ記録の再開として表す
+        to: AWAITING_ANSWER
+        via: RequestConsultation
+    events:
+      - name: ConsultationRequested
+      - name: ConsultationAnswered
+  - name: PlanReview
+    ctx: review
+    purpose: 計画書に対するAIエージェントの指摘を、1回のレビューごとに記録する
+    background: 計画書を作ったAIエージェント自身の確認では見落としや甘さが残るため、別の目で見た指摘を回ごとに残し、何が直され何が残ったかを起案者と経営会議が追えるようにする
+    states:
+      - FINDINGS_RAISED
+    terminalStates: []
+    events:
+      - name: PlanReviewed
+    constraints:
+      - レビューは、計画書を作ったのとは別のAIエージェントが行う
+      - 観点は市場・顧客／収支・数字／実行体制／会社の戦略との整合の4つ
+    transitions:
+      - from: NONE
+        to: FINDINGS_RAISED
+        via: ReviewPlan
+      - from: FINDINGS_RAISED
+        note: 検査上はレビューを1件として扱うため、2回目以降のレビューを同じ記録の更新として表す
+        to: FINDINGS_RAISED
+        via: ReviewPlan
+  - name: PreliminaryJudgment
+    ctx: review
+    purpose: 提出された計画書が基準を満たすかの一次判定の結果を、基準ごとに保持する
+    background: 最終判断は経営会議が行う。一次判定はその材料で、届かなくても起案者の判断で経営会議に上げられる
+    constraints:
+      - 基準ごとに「満たす・届かない」の2択。1つでも届かなければ全体も「届かない」
+    states:
+      - PASSED
+      - FAILED
+    terminalStates: []
+    events:
+      - name: PreliminaryJudgmentPassed
+      - name: PreliminaryJudgmentFailed
+    transitions:
+      - from: NONE
+        to:
+          - PASSED
+          - FAILED
+        via: JudgePlanPreliminarily
+      - from: PASSED
+        note: 出し直された計画書の再判定
+        to:
+          - PASSED
+          - FAILED
+        via: JudgePlanPreliminarily
+      - from: FAILED
+        note: 出し直された計画書の再判定
+        to:
+          - PASSED
+          - FAILED
+        via: JudgePlanPreliminarily
+  - name: PreliminaryJudgmentCriteria
+    ctx: review
+    purpose: 一次判定に使う基準を、経営会議が定めた形で保持し、一次判定のよりどころにする
+    background: 最終判断をする経営会議が、何を満たせば議論に値するかをあらかじめ示す。起案のたびに基準が変わると一次判定の結果を比べられず、起案者も何を目指せばよいか分からなくなるため、起案ごとの流れの外で定める
+    states:
+      - DEFINED
+    events:
+      - name: PreliminaryJudgmentCriteriaDefined
+    constraints:
+      - 基準を定められるのは経営会議だけ
+      - 基準を改めたときは、改めたあとに提出された計画書から新しい基準を使う。判定済みの結果は変えない
+    transitions:
+      - from: NONE
+        to: DEFINED
+        via: DefinePreliminaryJudgmentCriteria
+      - from: DEFINED
+        note: 経営会議が基準を改める
+        to: DEFINED
+        via: DefinePreliminaryJudgmentCriteria
+    terminalStates: []
+  - name: ApprovalCase
+    ctx: approval
+    purpose: 経営会議に上げられた起案が、承認・条件つき承認・差し戻し・却下のいずれかの結論に至り、条件つきなら期限内の条件確認まで終えるまでを一貫して追う
+    background: 一次判定は材料にすぎず、事業として進めるかどうかは経営会議の場で話し合って議長が決める。結論とその後の条件の扱いを1か所で追えるようにし、起案者が自分の起案がいまどうなっているかを確かめられるようにする
+    constraints:
+      - 結論は承認・条件つき承認・差し戻し・却下の4種類
+      - 差し戻しは5回まで。5回差し戻した起案がもう一度上がってきたら、審議はするが差し戻しは選べない
+      - 却下された起案は再開しない（出し直しは新しい起案）
+      - 条件つき承認には必ず期限を付ける。期限までに条件を満たせなければ承認は取り消す
+    states:
+      - ESCALATED
+      - APPROVED
+      - CONDITIONALLY_APPROVED
+      - CONDITIONS_CONFIRMED
+      - CONDITIONAL_APPROVAL_REVOKED
+      - RETURNED
+      - REJECTED
+    terminalStates:
+      - APPROVED
+      - CONDITIONS_CONFIRMED
+      - CONDITIONAL_APPROVAL_REVOKED
+      - REJECTED
+    transitions:
+      - from: ESCALATED
+        to:
+          - APPROVED
+          - CONDITIONALLY_APPROVED
+          - RETURNED
+          - REJECTED
+        via: DecideOnPlan
+      - from: CONDITIONALLY_APPROVED
+        to: CONDITIONS_CONFIRMED
+        via: ConfirmConditionsMet
+      - from: RETURNED
+        to: ESCALATED
+        via: EscalateToExecutiveMeeting
+        when: 直した計画書が一次判定を経て、ふたたび上げられたとき
+      - from: CONDITIONALLY_APPROVED
+        to: CONDITIONAL_APPROVAL_REVOKED
+        via: RevokeConditionalApproval
+        when: 期限までに条件を満たしたと確かめられなかったとき
+      - from: NONE
+        to: ESCALATED
+        via: EscalateToExecutiveMeeting
+    events:
+      - name: PlanEscalated
+      - name: PlanApproved
+      - name: PlanConditionallyApproved
+      - name: PlanReturned
+      - name: PlanRejected
+      - name: ConditionsConfirmed
+      - name: ConditionalApprovalRevoked
+queries:
+  - name: ProposalStatusList
+    ctx: planning
+    purpose: どの起案がどこまで進んでいるか（作成中・提出済み・経営会議待ち・結論済みなど）を一覧で確かめる
+    users: 起案者・経営会議
+    sources:
+      - BusinessPlan
+      - PreliminaryJudgment
+      - ApprovalCase
+    formula: 起案ごとに、計画書の状態・最新の一次判定の結果・承認案件の状態をまとめて1行にする
+  - name: PendingConsultationList
+    ctx: planning
+    purpose: 専門の担当者が、自分が答えるべき答え待ちの相談を一覧で確かめる
+    users: 専門の担当者
+    sources:
+      - Consultation
+    formula: 状態が答え待ちの相談を、出された順に並べる
+invariants:
+  - kind: safety
+    name: NoSubmittedPlanWhileConsultationPending
+    never:
+      - agg: Consultation
+        in:
+          - AWAITING_ANSWER
+      - agg: BusinessPlan
+        in:
+          - SUBMITTED
+    note: 答え待ちの相談があるあいだ、計画書は提出済みにならない（D27・D33）
+  - kind: safety
+    name: WithdrawnPlanIsNeverApproved
+    never:
+      - agg: BusinessPlan
+        in:
+          - WITHDRAWN
+      - agg: ApprovalCase
+        in:
+          - APPROVED
+          - CONDITIONALLY_APPROVED
+          - CONDITIONS_CONFIRMED
+    note: 取り下げた起案が承認されることはない（D28）。経営会議に上げたあとは取り下げられない（D39）ことで守る
+  - eventually:
+      agg: ApprovalCase
+      in:
+        - CONDITIONS_CONFIRMED
+        - CONDITIONAL_APPROVAL_REVOKED
+    kind: liveness
+    name: ConditionalApprovalIsResolved
+    note: 条件つき承認は、いずれ条件を確かめ済みか取り消しのどちらかになる（D36）
+    when:
+      agg: ApprovalCase
+      in:
+        - CONDITIONALLY_APPROVED
+  - name: NoPreliminaryJudgmentWithoutCriteria
+    kind: safety
+    never:
+      - agg: PreliminaryJudgmentCriteria
+        in:
+          - NONE
+      - agg: PreliminaryJudgment
+        in:
+          - PASSED
+          - FAILED
+    note: 経営会議が基準を定める前に、一次判定の結果が出ることはない（D18）
+  - name: NoPlanChangeWhileUnderExecutiveReview
+    kind: safety
+    never:
+      - agg: ApprovalCase
+        in:
+          - ESCALATED
+      - agg: BusinessPlan
+        in:
+          - DRAFTED
+          - REVISED
+    note: 経営会議に上がって結論を待っているあいだ、計画書が書き換わることはない。進行役が足した性質で、本人の確認はまだ
