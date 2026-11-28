@@ -1,0 +1,1993 @@
+# ⚠ This file is managed by dmlctl (.claude/skills/eventstorming-facilitator/scripts/dmlctl.py).
+# AI agents must use `dmlctl view/init/set/add/remove/update` and MUST NOT edit this file directly
+# (PreToolUse hook blocks direct Read/Edit/Write). Humans may edit outside Claude Code.
+
+# =============================================================================
+# DML テンプレート — 新規 EventStorming セッション
+# =============================================================================
+# `dmlctl init <file> --session-id=... --domain=...` がこのテンプレートから
+# session 入りの空 DML を生成する。以降は dmlctl set/add/update で育てる。
+#
+# 全フィールドは optional。空 YAML（{} のみ）でも valid（進行中セッション許容）。
+# HTML（dist/eventstorming/*.html）は本 YAML のみから自動生成される。
+#
+# 各フィールドの書き方の正典：
+#   - 型・必須・enum      → references/dml.schema.yaml（書く前に `dmlctl hint --path=<a.b.c>`）
+#   - 設計判断・モデリングルール → references/ddd-playbook.md（DDD 概念軸の正典）
+#   - 記入済みのフル例    → examples/sample.dml.yaml
+# =============================================================================
+#
+# トップレベルフィールド一覧（記入順の目安 = フェーズ進行順）：
+#
+#   session:      # セッションメタ（id / domain / phase / status / goal / started_at）
+#                 # phase の前進は `dmlctl advance` を使う（enum 検証つき）
+#
+#   narratives:   # 散文＋フロー起点。kind: happy は 1 本（400〜600 字）、
+#                 # kind: alt は複数可（100〜200 字）。entry 指定で §2 フロー図を駆動
+#
+#   domains:      # サブドメイン分類（subs[].type: CORE/SUPPORTING/GENERIC_SUBDOMAIN）
+#
+#   contexts:     # BC 宣言。name / description（散文）/ lang（英→日辞書：
+#                 # aggs/actors/cmds/evts/pols/qrys/vos）/ up / dn / aggs（AGG 名簿）
+#
+#   aggregates:   # AGG 詳細。name / ctx / purpose / background / constraints /
+#                 # states / transitions / attrs / events
+#                 # 生成 CMD は transitions に書かない（ddd-playbook §8「transitions[] の初期化規約」）
+#
+#   scenarios:    # CMD 実行ユースケース。name（日本語・アクター＋行為）/ ctx / actor /
+#                 # cmd / evt|brs / agg / rules / errs / next（フロー連鎖）
+#
+#   policies:     # EVENTUAL-TX 専用。trg（単一）or trgs（join/OR）/ cmd / evt /
+#                 # bulk（true なら qry 必須）/ within（遅延許容 SLA）
+#
+#   decisions:    # 意思決定ログ。topic / chosen / options[]（name/label/why/why_not）/ affects
+#
+#   questions:    # オープンクエスチョン（status: open|closed、closed は decision_id 必須）
+#   actions:      # 次のアクション（done フラグで進捗管理。`dmlctl action` で更新）
+#   queries:      # リードモデル候補（name / ctx / purpose / users / sources / formula)
+#
+# aggregates / policies / scenarios を足したら、所属 BC の contexts[].lang にも
+# 英→日ラベルを同時登録する（漏れは language_coverage チェックが検出）。
+# =============================================================================
+session:
+  id: eventstorming-20261128-1105
+  domain: コーヒーショップ（焙煎・豆販売あり／AIエージェント前提の再デザイン）
+  phase: '7'
+  status: Phase 7 完了。未確認事項なし。次のアクションA2・A3（全数試飲の計画、支払い・配送サービスの選定）
+  goal: フィジカルAI（ロボット）と店のAIエージェント、キャラの立ったマスターが切り盛りする、豆にこだわる店の業務をAIエージェント前提で設計し直す
+  started_at: '2026-11-28'
+  html_link: ../../dist/eventstorming/eventstorming-20261128-1105.html
+narratives:
+  - id: happy
+    kind: happy
+    title: ハッピーパス — 生豆の選定から一杯の提供まで
+    prose: マスターが自分の舌と目で生豆を選び、店のAIエージェントが発注して、届いた生豆を伝票と照合して在庫に加える。生豆はフィジカルAI（焙煎ロボット）が焙煎し、測定で基準内なら焙煎豆として店に並ぶ。客のアプリやAIが来店して注文し、自動で支払う。注文を受けたロボットが接客して好みに合う豆を提案し、ドリンクを淹れて客に提供する。
+    entry: マスターが生豆を選んで仕入れる
+  - id: alt-roast-miss
+    kind: alt
+    title: 代替 — 焙煎が狙いどおりにならない
+    prose: 測定結果が基準外の豆は、マスターが試飲して合否を判定する。不合格の豆は廃棄する（焙煎し直しや別用途には回さない）。実績がたまるまでは、測定結果にかかわらず、すべての焙煎豆をマスターが試飲する。
+    entry: 焙煎ロボットが焙煎結果を測定して判定する
+  - id: alt-bean-shortage
+    kind: alt
+    title: 代替 — 豆が足りない・傷んでいる
+    prose: 客が注文した豆の在庫がない、または鮮度が落ちている。ロボットが客に事情を伝えて代わりの豆を提案する。補充は、マスターが選んだことのある豆なら店のAIが自動で発注する。
+    entry: 接客ロボットが在庫切れの注文に代わりの豆を提案する
+  - id: alt-system-down
+    kind: alt
+    title: 代替 — ロボットが止まる
+    prose: 焙煎ロボットや接客ロボットが故障や通信断で止まる。店のAIが停止を検知し、客に状況を伝えて代わりの対応を案内する。マスターが手動に切り替える手順は未確認。
+    entry: 店のAIエージェントが機器の停止を検知する
+  - id: alt-receiving-mismatch
+    kind: alt
+    title: 代替 — 届いた生豆が伝票と合わない
+    entry: 店のAIエージェントが届いた生豆を伝票と照合して在庫に加える
+    prose: 届いた生豆の数量や状態が伝票と合わない。店のAIエージェントは在庫に加えず、仕入れ先に自動で問い合わせる。
+  - id: alt-payment-failure
+    kind: alt
+    title: 代替 — 支払いに失敗する
+    entry: 客のアプリやAIが自動で支払う
+    prose: 客のアプリやAIの支払いが失敗する。接客ロボットが客に声をかけて別の支払い方法を案内する。支払えないまま客が離れたら、一定時間で注文を取り消す。
+  - id: alt-retail
+    kind: alt
+    title: 代替 — 焙煎した豆を量り売り・袋売りで買う
+    entry: 客が焙煎した豆を量り売り・袋売りで買う
+    prose: 客が焙煎した豆を買う。詰めロボットが量って詰め、焙煎日のラベルを付ける。マスターが手書きのメッセージを添える（忙しいときは省略）。
+  - id: alt-subscription
+    kind: alt
+    title: 代替 — 豆の定期便
+    entry: 客が豆の定期便を申し込む
+    prose: 客が豆の定期便を申し込む。マスターが毎月の豆を選び、詰めロボットが詰め、マスターが手書きのメッセージを添える。発送は外部の配送業者が行う。客は次の発送前なら、休止や解約ができる。
+scenarios:
+  - name: マスターが生豆を選んで仕入れる
+    ctx: sourcing
+    actor: Master
+    cmd: SelectGreenBeans
+    evt: GreenBeansSelected
+    next: 店のAIエージェントが生豆を発注する
+  - name: 焙煎ロボットが生豆を焙煎する
+    ctx: roasting
+    actor: RoastingRobot
+    cmd: RoastBeans
+    evt: BeansRoasted
+    next: 焙煎ロボットが焙煎結果を測定して判定する
+    agg: RoastBatch
+    rules:
+      - rule: NoNewRoastInstructionWhileRoasting
+        why: 焙煎中に重ねて指示すると、同じ豆が余って鮮度を損なうため
+    errs:
+      - cond: 焙煎に使える生豆の在庫がない
+        err: NoGreenBeansInStock
+        when: 焙煎の指示時
+  - name: 焙煎ロボットが焙煎結果を測定して判定する
+    ctx: roasting
+    actor: RoastingRobot
+    cmd: MeasureRoast
+    brMode: exclusive
+    brs:
+      - cond: 測定値が基準内
+        evt: RoastApproved
+      - cond: 測定値が基準外
+        evt: RoastFlaggedForTasting
+    next:
+      happy: 客が来店して接客ロボットに注文する
+      alt-roast-miss: マスターが基準外の豆を試飲して判定する
+    rules:
+      - rule: RoastedBatchesAreJudgedAgainstCriteriaBuiltFromApprovedBatches
+        why: 豆ごとの微妙な違いまで合否に反映し、マスターの舌で積み上げた合格の実績を無駄にしないため
+      - rule: AllRoastsAreTastedByMasterUntilMasterSwitchesToAutomatedCriteria
+        why: 基準の元になる合格の実績を、マスターの舌で確実に積み上げるため
+    agg: RoastBatch
+    note: 全数試飲の期間中は、測定が基準内でも試飲待ちにする（D27）。マスターが切り替えるまで続く（D28）
+  - name: マスターが基準外の豆を試飲して判定する
+    ctx: roasting
+    actor: Master
+    cmd: TasteFlaggedRoast
+    brMode: exclusive
+    brs:
+      - cond: マスターが合格と判断
+        evt: RoastApprovedByMaster
+        terminal: alt-roast-miss
+      - cond: マスターが不合格と判断
+        evt: RoastRejected
+    next: マスターが不合格の豆を廃棄する
+    note: 実績がたまるまでは、測定の結果にかかわらずすべての焙煎豆をマスターが試飲する（D27）。実績がたまったあとは基準外の豆だけ（D1）
+    agg: RoastBatch
+  - name: 客が来店して接客ロボットに注文する
+    ctx: ordering
+    actor: Customer
+    cmd: PlaceOrder
+    evt: OrderPlaced
+    next: 客のアプリやAIが自動で支払う
+    agg: Order
+  - name: 客が焙煎した豆を量り売り・袋売りで買う
+    ctx: retail
+    actor: Customer
+    cmd: PurchaseBeans
+    evt: BeansPurchased
+    next: 詰めロボットが量り売りの豆を量って詰める
+  - name: 客が豆の定期便を申し込む
+    ctx: subscription
+    actor: Customer
+    cmd: SubscribeBeans
+    evt: SubscriptionStarted
+    agg: Subscription
+    next: マスターが定期便の豆を毎月選ぶ
+  - name: 店のAIエージェントが生豆を発注する
+    ctx: sourcing
+    actor: ShopAgent
+    cmd: PlaceGreenBeansOrder
+    evt: GreenBeansOrdered
+    pivotal: true
+    next: 店のAIエージェントが届いた生豆を伝票と照合して在庫に加える
+    agg: GreenBeansLot
+    rules:
+      - rule: AutoReorderTargetsOnlyBeansTheMasterHasChosenBefore
+        why: マスターが選んでいない豆を機械が勝手に仕入れると、豆へのこだわりが崩れるため
+      - rule: NoReorderWhileLotIsOrdered
+        why: 発注済みの入荷が届くまで再発注すると、同じ豆が余って鮮度を損なうため
+    errs:
+      - cond: マスターが選んだことのない豆を自動で補充しようとした
+        err: BeanNotChosenByMaster
+        when: 自動補充の発注時
+      - cond: 発注済みの入荷が届く前に再発注しようとした
+        err: GreenBeansAlreadyOrdered
+        when: 自動補充の発注時
+  - name: マスターが不合格の豆を廃棄する
+    ctx: roasting
+    actor: Master
+    cmd: DiscardRoast
+    evt: RoastDiscarded
+    agg: RoastBatch
+  - name: 接客ロボットが客の許可を取って好みを記録する
+    ctx: ordering
+    actor: ReceptionRobot
+    cmd: RecordPreference
+    evt: PreferenceRecorded
+    rules:
+      - rule: PreferenceIsRecordedOnlyWithCustomerConsent
+        why: 客が安心して好みを預けられる信頼を守るため。許可のない記録は、店への信頼を損なう
+    agg: CustomerPreference
+  - name: マスターが定期便の豆を毎月選ぶ
+    ctx: subscription
+    actor: Master
+    cmd: SelectMonthlyBeans
+    evt: MonthlyBeansSelected
+    agg: Subscription
+    next: 詰めロボットが定期便の豆を詰める
+  - name: 客のアプリやAIが自動で支払う
+    ctx: ordering
+    actor: CustomerAgent
+    cmd: Pay
+    pivotal: true
+    brMode: exclusive
+    brs:
+      - cond: 支払いに成功
+        evt: PaymentCompleted
+        terminal: alt-payment-failure
+      - cond: 支払いに失敗
+        evt: PaymentFailed
+        pol:
+          - GuideAlternativePaymentOnFailure
+    agg: Order
+    next:
+      happy: ドリンクロボットが注文のドリンクを淹れる
+      alt-payment-failure: 接客ロボットが支払いに失敗した客に別の支払い方法を案内する
+  - name: 接客ロボットが在庫切れの注文に代わりの豆を提案する
+    ctx: ordering
+    actor: ReceptionRobot
+    cmd: ProposeAlternativeBeans
+    evt: AlternativeBeansProposed
+    qry:
+      - FreshRoastedBeansForSale
+  - name: 店のAIエージェントが機器の停止を検知する
+    ctx: operations
+    actor: ShopAgent
+    cmd: DetectOutage
+    evt: OutageDetected
+    next: マスターが停止に気づいて手動運転に切り替える
+    pol:
+      - NotifyCustomerOnOutage
+  - name: 店のAIエージェントが届いた生豆を伝票と照合して在庫に加える
+    ctx: sourcing
+    actor: ShopAgent
+    cmd: ReceiveGreenBeans
+    agg: GreenBeansLot
+    brMode: exclusive
+    brs:
+      - cond: 伝票と一致
+        evt: GreenBeansReceived
+        terminal: alt-receiving-mismatch
+      - cond: 伝票と不一致
+        evt: DiscrepancyDetected
+        pol:
+          - InquireSupplierOnDiscrepancy
+    next:
+      happy: 店のAIエージェントが焙煎済み在庫の減少を検知する
+      alt-receiving-mismatch: 店のAIエージェントが伝票と合わない生豆を仕入れ先に問い合わせる
+    rules:
+      - rule: MismatchedLotIsNotAddedToStock
+        why: 伝票と合わない入荷を在庫に加えると、在庫の量と請求がずれて、焙煎や補充の判断を誤るため
+    errs:
+      - cond: 伝票と数量や状態が合わない入荷
+        err: GreenBeansDiscrepancy
+        when: 入荷の照合時
+  - name: 店のAIエージェントが焙煎済み在庫の減少を検知する
+    ctx: roasting
+    actor: ShopAgent
+    cmd: CheckRoastedStock
+    evt: RoastedStockLow
+    qry:
+      - RoastedStockLevel
+    next: 焙煎ロボットが生豆を焙煎する
+    pol:
+      - AutoInstructRoastingOnLowStock
+  - name: 詰めロボットが定期便の豆を詰める
+    ctx: subscription
+    actor: PackingRobot
+    cmd: PackSubscriptionBeans
+    evt: SubscriptionBeansPacked
+    rules:
+      - rule: RoastedBeansAreShippedWithin3DaysOfRoasting
+        why: 鮮度にこだわる店なので、焙煎から3日を過ぎた焙煎豆は発送しない。配送にかかる日数は数えない
+    errs:
+      - cond: 発送時点で焙煎から3日を過ぎた豆を詰めようとした
+        err: RoastedBeansExpired
+        when: 詰める前の期限確認
+    next: 定期便の詰めた豆に手書きのメッセージを添える
+    note: 詰めるときにロボットが焙煎日のラベルを付ける（D34）。焙煎ロット番号は袋のラベルや記録で結び付ける
+    agg: Subscription
+    qry:
+      - FreshRoastedBeansForSale
+  - name: 外部の配送業者が定期便を客に届ける
+    ctx: subscription
+    actor: DeliveryCarrier
+    cmd: DeliverSubscriptionBeans
+    evt: SubscriptionBeansDelivered
+    agg: Subscription
+  - name: 店のAIエージェントが伝票と合わない生豆を仕入れ先に問い合わせる
+    ctx: sourcing
+    actor: ShopAgent
+    cmd: InquireSupplierDiscrepancy
+    evt: SupplierInquirySent
+    note: 受け入れ scenario の分岐（伝票と一致／不一致）としてフェーズ4で繋ぎ直す
+    agg: GreenBeansLot
+  - name: マスターが豆ごとの在庫の目安を決める
+    ctx: roasting
+    actor: Master
+    cmd: DefineRestockLevel
+    evt: StockThresholdSet
+    note: 対象は焙煎済み在庫と生豆の在庫の両方の補充の目安（D39）
+  - name: ドリンクロボットが注文のドリンクを淹れる
+    ctx: ordering
+    actor: DrinkRobot
+    cmd: BrewDrink
+    evt: DrinkBrewed
+    next: ドリンクに最後の一手を加えて仕上げる
+    agg: Order
+  - name: 詰めロボットが量り売りの豆を量って詰める
+    ctx: retail
+    actor: PackingRobot
+    cmd: WeighAndPackBeans
+    evt: BeansPacked
+    next: 袋詰めした豆に手書きのメッセージを添える
+    rules:
+      - rule: RoastedBeansAreHandedToCustomersWithin3DaysOfRoasting
+        why: 鮮度にこだわる店なので、焙煎から3日を過ぎた焙煎豆は客に渡さない
+    errs:
+      - cond: 焙煎から3日を過ぎた豆を詰めようとした
+        err: RoastedBeansExpired
+        when: 詰める前の期限確認
+    note: 詰めるときにロボットが焙煎日のラベルを付ける（D34）。焙煎ロット番号は袋のラベルや記録で結び付ける
+    qry:
+      - FreshRoastedBeansForSale
+  - name: 店のAIエージェントが生豆の在庫減少を検知する
+    ctx: sourcing
+    actor: ShopAgent
+    cmd: CheckGreenBeansStock
+    evt: GreenBeansStockLow
+    qry:
+      - GreenBeansStockLevel
+  - name: 接客ロボットが支払いに失敗した客に別の支払い方法を案内する
+    ctx: ordering
+    actor: ReceptionRobot
+    cmd: GuideAlternativePayment
+    evt: AlternativePaymentGuided
+    agg: Order
+    next: 店のAIエージェントが支払いを放棄された注文を取り消す
+    note: 別の方法で支払えた場合は Pay に戻る（PAYMENT_FAILED→PAID）。図には出さない
+  - name: 店のAIエージェントが停止を客に伝えて代わりの対応を案内する
+    ctx: operations
+    actor: ShopAgent
+    cmd: NotifyCustomerOfOutage
+    evt: CustomerNotifiedOfOutage
+  - name: 袋詰めした豆に手書きのメッセージを添える
+    ctx: retail
+    actor: Master
+    cmd: WriteHandwrittenMessage
+    evt: HandwrittenMessageWritten
+    note: 手職人の温かみが残る場面。担い手はマスター本人（D23）
+    rules:
+      - rule: FinalTouchMayBeOmittedWhenMasterIsBusy
+        why: マスターが忙しいときは、客を待たせないために最後の一手を省略してよいと決めたため。焙煎日はロボットのラベルで付くので、省略しても焙煎日は残る
+  - name: ドリンクに最後の一手を加えて仕上げる
+    ctx: ordering
+    actor: Master
+    cmd: FinishDrink
+    evt: DrinkFinished
+    note: 手職人の温かみが残る場面。ラテアートや仕上げの声かけ。担い手はマスター本人（D23）
+    rules:
+      - rule: FinalTouchMayBeOmittedWhenMasterIsBusy
+        why: マスターが忙しいときは、客を待たせないために最後の一手を省略してよいと決めたため
+    agg: Order
+  - name: 定期便の詰めた豆に手書きのメッセージを添える
+    ctx: subscription
+    actor: Master
+    cmd: WriteSubscriptionMessage
+    evt: SubscriptionMessageWritten
+    note: 手職人の温かみが残る場面。担い手はマスター本人（D23）。量り売り・袋売りと定期便の両方に付ける（D26）
+    rules:
+      - rule: FinalTouchMayBeOmittedWhenMasterIsBusy
+        why: マスターが忙しいときは、客を待たせないために最後の一手を省略してよいと決めたため。焙煎日はロボットのラベルで付くので、省略しても焙煎日は残る
+    agg: Subscription
+    next: 外部の配送業者が定期便を客に届ける
+  - name: マスターが全数試飲をやめて店のAIの基準に切り替える
+    ctx: roasting
+    actor: Master
+    cmd: ActivateAutomatedCriteria
+    evt: AutomatedCriteriaActivated
+    note: 実績がたまったかどうかはマスターが「もう大丈夫」と判断する（D28）
+  - name: マスターが停止に気づいて手動運転に切り替える
+    ctx: operations
+    actor: Master
+    cmd: SwitchToManualOperation
+    evt: ManualOperationStarted
+    note: 通知はなく、マスターが目で見て気づく（D30）
+    next: マスターが復旧を確認して自動運転に戻す
+  - name: 客が定期便を休止する
+    ctx: subscription
+    actor: Customer
+    cmd: PauseSubscription
+    evt: SubscriptionPaused
+    agg: Subscription
+    errs:
+      - cond: 今月の発送の詰めを始めたあとに休止を申し出た
+        err: SubscriptionShipmentAlreadyStarted
+        when: 今月の発送の詰めを始めたあと
+  - name: 客が定期便を再開する
+    ctx: subscription
+    actor: Customer
+    cmd: ResumeSubscription
+    evt: SubscriptionResumed
+    agg: Subscription
+  - name: 客が定期便をやめる
+    ctx: subscription
+    actor: Customer
+    cmd: CancelSubscription
+    evt: SubscriptionCancelled
+    agg: Subscription
+    errs:
+      - cond: 次の発送を始めたあとに解約を申し出た
+        err: SubscriptionShipmentAlreadyStarted
+        when: 次の発送の詰めを始めたあと
+  - name: 客が淹れ始める前に注文を取り消す
+    ctx: ordering
+    actor: Customer
+    cmd: CancelOrder
+    evt: OrderCancelled
+    agg: Order
+    errs:
+      - cond: ドリンクを淹れ始めたあとに取り消そうとした
+        err: OrderAlreadyBrewing
+        when: 淹れ始めたあと
+  - name: 接客ロボットが客の求めに応じて好みの記録を削除する
+    ctx: ordering
+    actor: ReceptionRobot
+    cmd: EraseCustomerPreference
+    evt: CustomerPreferenceErased
+    agg: CustomerPreference
+    rules:
+      - rule: PreferenceIsErasedImmediatelyWhenConsentIsWithdrawn
+        why: 客の許可を取って記録すると決めたため、許可が取り消されたらすぐ削除する
+  - name: 店のAIエージェントが支払いを放棄された注文を取り消す
+    ctx: ordering
+    actor: ShopAgent
+    cmd: CancelAbandonedOrder
+    evt: AbandonedOrderCancelled
+    agg: Order
+    note: 支払いに失敗したまま客が離れて10分が過ぎたとき（D40）
+  - name: マスターが復旧を確認して自動運転に戻す
+    ctx: operations
+    actor: Master
+    cmd: RestoreAutomaticOperation
+    evt: AutomaticOperationRestored
+questions:
+  - id: Q1
+    topic: 持ち帰りドリンクも扱うか
+    why: 商品の質問で持ち帰りドリンクは選ばれなかったため、扱わない前提で暫定。必要なら再検討
+    status: closed
+    decision_id: D31
+  - id: Q2
+    topic: 停止を検知した後にマスターへ切り替える手順
+    why: 停止の発見は店のAIが監視すると決まったが、検知後に誰へ何を伝え手動運転へ移るかは未確認
+    status: closed
+    note: 客への案内はD17で決定。マスターへの通知と手動運転への切り替え手順は未確認のまま
+    decision_id: D30
+  - id: Q3
+    topic: 自動補充発注の対象と上限
+    why: D3は発注のたびにマスターが豆を選ぶ前提だが、D15で在庫減少時は自動発注になった。マスターが選んだことのある豆だけか、金額や量の上限があるかが未確認
+    status: closed
+    decision_id: D15
+  - id: Q4
+    topic: バーチャル接客を削る場合、接客を誰が担うか
+    why: q-22の自由記述に「バーチャル接客は削って」とあった。キャラが接客する前提で決めたD4・D7・D16と、ordering BCのシナリオ多数に影響するため、確認するまでモデルは変更しない
+    status: closed
+    decision_id: D19
+  - id: Q5
+    topic: 手書きメッセージやドリンクの最後の一手を誰が行うか
+    why: 温かみが残る場面として「袋詰めや手書きのメッセージ」「ドリンクの最後の一手」が挙がったが、マスター本人が行うのか、ロボットが手職人の所作を再現するのかが未確認。D13・D14（ロボットが淹れる・詰める）との関係にも影響
+    status: closed
+    decision_id: D23
+  - id: Q6
+    topic: 焙煎した豆を渡してよい期限の具体的な日数
+    why: D24で「焙煎から数日以内と一律に決める」としたが、何日以内かが未確認。ルールの日数はモデルに書けていない
+    status: closed
+    decision_id: D24
+  - id: Q7
+    topic: 合格の実績がない最初の基準の置き方
+    why: D25で基準は過去の合格データから店のAIが決めるとしたが、開店直後や新しい豆は実績がない。その間の基準を誰がどう置くかが未確認
+    status: closed
+    decision_id: D27
+  - id: Q8
+    topic: 定期便の期限3日が発送までか届くまでか
+    why: D24で焙煎から3日以内と決めたが、定期便は配送に日数がかかる。3日が発送までか客の手元に届くまでかが未確認
+    status: closed
+    decision_id: D24
+  - id: Q9
+    topic: 実績がたまったと見なして試飲を外す条件
+    why: D27で実績がたまるまで全部マスターが試飲するとしたが、どれだけたまったら店のAIの基準に切り替えるかが未確認
+    status: closed
+    decision_id: D28
+  - id: Q10
+    topic: 忙しくてメッセージを省略するときの焙煎日の記入
+    why: D29では忙しいとき手書きメッセージを省略してよいが、D34では焙煎日を手書きメッセージとあわせて書く。省略すると焙煎日の記入も消え、焙煎から3日以内を客が確かめる手がかりがなくなる
+    status: closed
+    decision_id: D34
+  - id: Q11
+    topic: 支払いに失敗したまま客が離れたとき、放棄とみなす時間
+    why: 支払いに失敗した注文は一定時間で取り消すとしたが、何分で放棄とみなすかが未確認
+    status: closed
+    decision_id: D40
+decisions:
+  - id: D1
+    topic: 焙煎した豆の合否判定を誰がするか
+    chosen: robot-measure-master-taste-on-fail
+    options:
+      - name: master-always
+        label: 毎回マスターが試飲
+        why_not: 毎回の試飲は量が増えるとマスターの手が回らない
+      - name: robot-measure-master-taste-on-fail
+        label: ロボットが測り基準外のときだけマスターが試飲
+        adopted: true
+        why: 普段はロボットの測定で回し判断が分かれる豆だけマスターの舌に任せられる
+      - name: robot-only
+        label: ロボットの測定だけで合格
+        why_not: 豆にこだわる店で人間の舌を通さずに並べるのは避けたい
+    affects:
+      - roasting
+    note: 選択肢は回答者が選んだもの。理由づけはAIが補った仮置きで、回答者に未確認。実績がたまるまでは全数試飲（D27）で、この決定は切り替え（D28）後の運用
+  - id: D2
+    topic: 試飲で不合格だった豆の扱い
+    chosen: discard
+    options:
+      - name: discard
+        label: 廃棄する
+        adopted: true
+        why: こだわりの基準に届かない豆は店に出さない
+      - name: re-roast
+        label: 焙煎し直す
+        why_not: 一度外れた豆は狙いの味に戻らない
+      - name: repurpose
+        label: 別の用途に回す
+        why_not: 品質の線引きが曖昧になる
+    affects:
+      - roasting
+    note: 選択肢は回答者が選んだもの。理由づけはAIが補った仮置きで、回答者に未確認
+  - id: D3
+    topic: 生豆の発注を誰が実行するか
+    chosen: agent-orders-master-selects
+    options:
+      - name: agent-orders-master-selects
+        label: 店のAIエージェントが発注しマスターは選ぶだけ
+        adopted: true
+        why: マスターは豆を見極めることに専念し発注の手間をAIに任せる
+      - name: master-orders
+        label: マスターが自分で発注する
+        why_not: 発注の手間でマスターの時間が取られる
+      - name: ai-proposes-master-approves
+        label: AIが案を作りマスターが承認して発注する
+        why_not: 選ぶ判断と承認が二重になる
+    affects:
+      - sourcing
+    note: 選択肢は回答者が選んだもの。理由づけはAIが補った仮置きで、回答者に未確認
+  - id: D4
+    topic: 常連客の好みの記憶
+    chosen: remember-with-consent
+    options:
+      - name: remember-with-consent
+        label: 客の許可を取ったうえで記録する
+        adopted: true
+        why: 客が安心して好みを預けられる
+      - name: remember-auto
+        label: 来店したら自動で記録する
+        why_not: 客の知らないうちに記録するのは信頼を損なう
+      - name: no-memory
+        label: 覚えない
+        why_not: 好みに合う提案ができなくなる
+    affects:
+      - ordering
+      - CustomerPreference
+    note: 選択肢は回答者が選んだもの。理由づけはAIが補った仮置きで、回答者に未確認
+  - id: D5
+    topic: 定期便の今月の豆を誰が決めるか
+    chosen: master-picks-monthly
+    options:
+      - name: master-picks-monthly
+        label: マスターが毎月選ぶ
+        adopted: true
+        why: 豆にこだわる店の顔としてマスターの選定を売りにできる
+      - name: ai-picks
+        label: 店のAIが客の好みから選ぶ
+        why_not: 豆へのこだわりがマスターの選定から離れる
+      - name: customer-picks
+        label: 客が選ぶ
+        why_not: 選ぶ手間が客に残る
+    affects:
+      - subscription
+    note: 選択肢は回答者が選んだもの。理由づけはAIが補った仮置きで、回答者に未確認
+  - id: D6
+    topic: 客からの支払いを誰が行うか
+    chosen: customer-agent-auto-pays
+    options:
+      - name: customer-agent-auto-pays
+        label: 客のアプリやAIが自動で支払う
+        adopted: true
+        why: AIエージェント前提の店で客を待たせず注文から支払いまで完了できる
+      - name: prepay-at-robot
+        label: 接客ロボットが注文とあわせて受け取る
+        why_not: 客の側にも代理AIがいる前提とずれる
+      - name: pay-on-handoff
+        label: ドリンクを渡すときに受け取る
+        why_not: 渡す場面に支払いの手間が入る
+    affects:
+      - ordering
+    note: 選択肢は回答者が選んだもの。理由づけはAIが補った仮置きで、回答者に未確認
+  - id: D7
+    topic: 在庫切れ時の接客ロボットの対応
+    chosen: propose-alternative
+    options:
+      - name: propose-alternative
+        label: 代わりの豆を提案する
+        adopted: true
+        why: 客の来店を無駄にせず好みに近い豆を勧められる
+      - name: wait-for-restock
+        label: 入荷を待つよう案内し予約を受ける
+        why_not: その場の注文が取れない
+      - name: call-master
+        label: マスターを呼ぶ
+        why_not: マスターの手が止まり接客が詰まる
+    affects:
+      - ordering
+    note: 選択肢は回答者が選んだもの。理由づけはAIが補った仮置きで、回答者に未確認
+  - id: D8
+    topic: 届いた生豆の受け入れを誰が行うか
+    chosen: agent-reconciles-and-stocks
+    options:
+      - name: agent-reconciles-and-stocks
+        label: 店のAIが伝票と照合して自動で在庫に加える
+        adopted: true
+        why: 受け入れの手間をAIに任せ、マスターは豆の見極めに専念できる
+      - name: master-inspects
+        label: マスターが目で見て確かめる
+        why_not: 入荷のたびにマスターの手が止まる
+      - name: robot-sensor
+        label: 焙煎ロボットがセンサーで確かめる
+        why_not: 伝票との照合はロボットの役割から外れる
+    affects:
+      - sourcing
+    note: 選択肢は回答者が選んだもの。理由づけはAIが補った仮置きで、回答者に未確認
+  - id: D9
+    topic: 焙煎の開始を誰が決めるか
+    chosen: agent-instructs-roasting-on-low-stock
+    options:
+      - name: agent-instructs-roasting-on-low-stock
+        label: 店のAIが在庫量を見て自動で焙煎を指示する
+        adopted: true
+        why: 在庫切れを防ぎ、マスターの判断を待たずに焙煎を回せる
+      - name: master-approves
+        label: AIが提案しマスターが承認してから始める
+        why_not: 承認待ちの間に在庫が切れ、焙煎が止まる恐れがある
+      - name: master-decides
+        label: マスターが自分で決めて指示する
+        why_not: 在庫の見張りと指示を人が続けることになり、見落とすとそのまま在庫切れになる
+    affects:
+      - roasting
+      - RoastBatch
+      - AutoInstructRoastingOnLowStock
+    note: 選択肢は回答者が選んだもの。理由づけはAIが補った仮置きで、回答者に未確認
+  - id: D10
+    topic: 定期便の詰めと発送を誰が行うか
+    chosen: robot-packs-carrier-delivers
+    options:
+      - name: robot-packs-carrier-delivers
+        label: ロボットが詰め、発送は外部の配送業者
+        adopted: true
+        why: 詰める作業は店内のロボットで回し、客の手元まで運ぶ部分は専門の業者に任せられる
+      - name: master-packs-and-ships
+        label: マスターが詰めて発送する
+        why_not: 定期便の件数が増えるとマスターの手が足りなくなる
+      - name: all-outsourced
+        label: 詰めも発送も外部に任せる
+        why_not: 豆にこだわる店が最後の仕上げを手放すことになる
+    affects:
+      - subscription
+    note: 選択肢は回答者が選んだもの。理由づけはAIが補った仮置きで、回答者に未確認
+  - id: D11
+    topic: 伝票と合わない生豆の扱い
+    chosen: agent-inquires-supplier
+    options:
+      - name: agent-inquires-supplier
+        label: 店のAIが仕入れ先に自動で問い合わせる
+        adopted: true
+        why: 不一致に気づいたその場で動け、マスターの手を止めずに済む
+      - name: master-decides
+        label: マスターが状態を見て受け取るか決める
+        why_not: 入荷のたびにマスターの判断待ちになる
+      - name: stock-matching-part
+        label: 合わない分を除いて在庫に加え後で精算する
+        why_not: 精算が後回しになり在庫と請求がずれる
+    affects:
+      - sourcing
+    note: 選択肢は回答者が選んだもの。理由づけはAIが補った仮置きで、回答者に未確認
+  - id: D12
+    topic: 在庫が減ったと判断する目安の決め手
+    chosen: master-sets-per-bean
+    options:
+      - name: master-sets-per-bean
+        label: マスターが豆ごとに決める
+        adopted: true
+        why: 豆ごとに売れ方や鮮度の保ち方が違い、豆に詳しいマスターが一番よく分かる
+      - name: ai-decides-from-sales
+        label: AIが売れ行きから自動で決める
+        why_not: 豆へのこだわりをマスターが手放すことになる
+      - name: uniform-threshold
+        label: 一律の目安をマスターが決める
+        why_not: 豆ごとの違いを反映できない
+    affects:
+      - roasting
+      - sourcing
+    note: 選択肢は回答者が選んだもの。理由づけはAIが補った仮置きで、回答者に未確認
+  - id: D13
+    topic: ドリンクを淹れる担当
+    chosen: robot-brews
+    options:
+      - name: robot-brews
+        label: フィジカルAI（淹れるロボット）
+        adopted: true
+        why: 注文が重なっても同じ味を安定して出せる
+      - name: master-brews
+        label: マスターが手で淹れる
+        why_not: 注文が重なるとマスターが接客や豆の見極めに手が回らない
+      - name: robot-with-master-exception
+        label: 通常はロボット特別な注文だけマスター
+        why_not: 特別な注文の線引きが曖昧で、ロボットとマスターのどちらが動くかが客に分かりにくくなる
+    affects:
+      - ordering
+    note: 選択肢は回答者が選んだもの。理由づけはAIが補った仮置きで、回答者に未確認
+  - id: D14
+    topic: 量り売りの豆を量って詰める担当
+    chosen: robot-weighs-and-packs
+    options:
+      - name: robot-weighs-and-packs
+        label: ロボットが量って詰める
+        adopted: true
+        why: 量の誤差が出にくく、客を待たせずに渡せる
+      - name: master-weighs
+        label: マスターが対面で量る
+        why_not: 対面で量る時間がマスターの手を止める
+      - name: customer-self-weighs
+        label: 客がセルフで量る
+        why_not: 量の誤差や衛生面が客任せになる
+    affects:
+      - retail
+    note: 選択肢は回答者が選んだもの。理由づけはAIが補った仮置きで、回答者に未確認
+  - id: D15
+    topic: 生豆が切れそうなときの補充発注
+    chosen: auto-reorder-on-low-stock
+    options:
+      - name: auto-reorder-on-low-stock
+        label: 在庫が減ったら店のAIが自動で発注する
+        adopted: true
+        why: 生豆切れで焙煎が止まるのを防ぎ、発注のたびにマスターの手を煩わせない
+      - name: propose-and-approve
+        label: AIが提案しマスターが承認してから発注する
+        why_not: 承認が遅れると入荷が遅れ、生豆が切れる恐れがある
+      - name: master-reorders
+        label: マスターが自分で見て発注する
+        why_not: 在庫の確認と発注の見落としが、そのまま生豆切れになる
+    affects:
+      - sourcing
+      - GreenBeansLot
+      - AutoReorderGreenBeansOnLowStock
+    note: ユーザー依頼による。自動補充の対象は、マスターが選んだことのある豆に限る（Q3の回答で確定）。新しい豆の発注は従来どおりマスターが選ぶ（D3）。理由づけはAIが補った仮置き
+  - id: D16
+    topic: 支払いに失敗したときの対応
+    chosen: robot-guides-alternative-payment
+    options:
+      - name: robot-guides-alternative-payment
+        label: ロボットが客に声をかけ別の支払い方法を案内する
+        adopted: true
+        why: 客を気まずくさせず、その場で支払いを済ませてドリンクを渡せる
+      - name: hold-until-paid
+        label: 何も案内せず、支払いが済むまで淹れずに待つ
+        why_not: 客は何が起きたか分からず、その場で立ち尽くす
+      - name: serve-and-bill-later
+        label: 淹れて渡し後で請求する
+        why_not: 取りはぐれの恐れが残る
+    affects:
+      - ordering
+      - Order
+      - GuideAlternativePaymentOnFailure
+    note: 選択肢は回答者が選んだもの。理由づけはAIが補った仮置きで、回答者に未確認
+  - id: D17
+    topic: 機器の停止を検知したときの最初の連絡先
+    chosen: notify-customer-with-alternative
+    options:
+      - name: notify-customer-with-alternative
+        label: 客に状況を伝え代わりの対応を案内する
+        adopted: true
+        why: 待たされる客に先に状況を伝えることで不安を和らげられる
+      - name: notify-master-manual-switch
+        label: マスターに通知して手動運転に切り替えてもらう
+        why_not: 回答者は選ばなかった（理由は未確認）
+      - name: notify-both
+        label: マスターと客の両方に伝える
+        why_not: 回答者は選ばなかった（理由は未確認）
+    affects:
+      - operations
+      - NotifyCustomerOnOutage
+    note: 理由づけはAIが補った仮置き。マスターへの切り替えはD30で確定（マスターが目で見て気づく）
+  - id: D18
+    topic: この店の強み（作り込む部分）
+    chosen: craft-and-physical-ai-fusion
+    options:
+      - name: craft-and-physical-ai-fusion
+        label: 手職人とフィジカルAIの融合（メカメカしさと温かみ）
+        adopted: true
+        why: '回答者の言葉: メカメカしいのと昔ながらの手職人の融合でフィジカルAIなのに温かみがある'
+      - name: master-eye-beans
+        label: マスターの目で選ぶ生豆と焙煎のこだわり
+        why_not: 回答者は選ばなかった（理由は未確認）
+      - name: subscription
+        label: 豆の定期便
+        why_not: 回答者は選ばなかった（理由は未確認）
+      - name: virtual-character-reception
+        label: バーチャルキャラの接客体験
+        why_not: 回答者は強みに挙げず、バーチャル接客を削るとした（D19）
+    affects:
+      - roasting
+      - ordering
+    note: 選択肢にない自由記述での回答。サブドメイン分類（どこをCOREとするか）は次の質問で確認
+  - id: D19
+    topic: バーチャル接客を削ったあと接客を誰が担うか
+    chosen: physical-ai-receives
+    options:
+      - name: physical-ai-receives
+        label: フィジカルAI（店内のロボット）が接客する
+        adopted: true
+        why: 手職人の温かみとメカメカしさを併せ持つ店の姿に、接客もロボットで揃えられる
+      - name: master-receives
+        label: マスターが対面で接客する
+        why_not: 回答者は選ばなかった（理由は未確認）
+      - name: agents-direct
+        label: 客のAIと店のAIが直接やり取りする
+        why_not: 回答者は選ばなかった（理由は未確認）
+    affects:
+      - ordering
+    note: バーチャルキャラは削除。注文の受付・好みの記録・代わりの豆の提案・支払い失敗時の案内はロボットに引き継ぐ。理由づけはAIが補った仮置き
+  - id: D20
+    topic: 支払いと配送の仕組みの作り方
+    chosen: use-existing-services
+    options:
+      - name: use-existing-services
+        label: 既存のサービスを使う
+        adopted: true
+        why: 他の店と同じでよい部分に手間をかけず、強みの部分に力を注げる
+      - name: build-in-house
+        label: 自分たちで作り込む
+        why_not: 回答者は選ばなかった（理由は未確認）
+      - name: payment-existing-delivery-custom
+        label: 支払いは既存、配送の連携は自分たちで作る
+        why_not: 回答者は選ばなかった（理由は未確認）
+    affects:
+      - ordering
+      - subscription
+    note: 選択肢は回答者が選んだもの。理由づけはAIが補った仮置きで、回答者に未確認
+  - id: D21
+    topic: ロボットの役割分担
+    chosen: robot-per-role
+    options:
+      - name: robot-per-role
+        label: 役割ごとに別のロボット（焙煎・接客・ドリンク・詰め）
+        adopted: true
+        why: 役割ごとに専用の動きを磨けて、1台が止まっても他の役割は動かせる
+      - name: single-robot
+        label: 同じロボットが全部やる
+        why_not: 回答者は選ばなかった（理由は未確認）
+      - name: roast-dedicated-others-shared
+        label: 焙煎だけ専用で接客・ドリンク・詰めは共用
+        why_not: 回答者は選ばなかった（理由は未確認）
+    affects:
+      - roasting
+      - ordering
+      - retail
+      - subscription
+    note: 選択肢は回答者が選んだもの。理由づけはAIが補った仮置きで、回答者に未確認
+  - id: D22
+    topic: 店の中核として作り込む業務
+    chosen: core-roasting-and-bean-retail
+    options:
+      - name: core-roasting-and-bean-retail
+        label: 焙煎と豆の小売り（袋詰めと手書きのメッセージ）
+        adopted: true
+        why: 手職人の目と舌、温かみが一番表れる業務に手間をかけられる
+      - name: core-ordering-and-drink-finish
+        label: 注文と接客、ドリンクの仕上げ
+        why_not: 回答者は選ばなかった（理由は未確認）
+      - name: core-subscription
+        label: 豆の定期便
+        why_not: 回答者は選ばなかった（理由は未確認）
+      - name: core-sourcing
+        label: 仕入れ
+        why_not: 回答者は選ばなかった（理由は未確認）
+    affects:
+      - roasting
+      - retail
+    note: 選択肢は回答者が選んだもの。理由づけはAIが補った仮置きで、回答者に未確認
+  - id: D23
+    topic: 手書きメッセージとドリンクの最後の一手の担い手
+    chosen: master-does-it
+    options:
+      - name: master-does-it
+        label: マスター本人がやる
+        adopted: true
+        why: 手職人の温かみは、マスター本人の手と声から出るため
+      - name: robot-recreates
+        label: ロボットが手職人の手つきを再現してやる
+        why_not: 回答者は選ばなかった（理由は未確認）
+      - name: customer-chooses
+        label: 客が選べる（マスター本人かロボットか）
+        why_not: 回答者は選ばなかった（理由は未確認）
+    affects:
+      - ordering
+      - retail
+    note: 選択肢は回答者が選んだもの。理由づけはAIが補った仮置きで、回答者に未確認
+  - id: D24
+    topic: 焙煎した豆を客に渡してよい期限の決め方
+    chosen: uniform-days-from-roast
+    options:
+      - name: uniform-days-from-roast
+        label: 焙煎から数日以内と一律に決める
+        adopted: true
+        why: 鮮度の線引きが誰にも分かりやすく、ロボットが機械的に判断できる
+      - name: master-sets-per-bean
+        label: マスターが豆ごとに期限を決める
+        why_not: 回答者は選ばなかった（理由は未確認）
+      - name: no-limit-master-judges
+        label: 期限を設けずマスターが見て判断する
+        why_not: 回答者は選ばなかった（理由は未確認）
+    affects:
+      - retail
+      - subscription
+    note: 期限は焙煎から3日以内。定期便は発送するときまでに3日以内（Q8の回答で確定）。理由づけはAIが補った仮置き
+  - id: D25
+    topic: 焙煎結果が基準外かどうかの基準の決め手
+    chosen: agent-learns-from-past-approvals
+    options:
+      - name: agent-learns-from-past-approvals
+        label: 過去の合格データから店のAIが自動で決める
+        adopted: true
+        why: 豆ごとの微妙な違いも、これまでの合格の実績から反映できる
+      - name: master-sets-per-bean
+        label: マスターが豆ごとに決める
+        why_not: 回答者は選ばなかった（理由は未確認）
+      - name: master-sets-uniform
+        label: 一律の基準をマスターが決める
+        why_not: 回答者は選ばなかった（理由は未確認）
+    affects:
+      - roasting
+    note: 実績がまだない最初の基準の置き方はD27で確定。理由づけはAIが補った仮置き
+  - id: D26
+    topic: 手書きメッセージを付ける範囲
+    chosen: both-retail-and-subscription
+    options:
+      - name: both-retail-and-subscription
+        label: 量り売り・袋売りと定期便の両方に付ける
+        adopted: true
+        why: 豆を受け取る客みんなに温かみが届き、店の個性になる
+      - name: retail-only
+        label: 量り売り・袋売りだけ
+        why_not: 回答者は選ばなかった（理由は未確認）
+      - name: subscription-only
+        label: 定期便だけ
+        why_not: 回答者は選ばなかった（理由は未確認）
+    affects:
+      - retail
+      - subscription
+    note: 選択肢は回答者が選んだもの。理由づけはAIが補った仮置きで、回答者に未確認
+  - id: D27
+    topic: 合格の実績がないときの基準の置き方
+    chosen: master-tastes-all-until-data
+    options:
+      - name: master-tastes-all-until-data
+        label: 実績がたまるまで、焙煎した豆をすべてマスターが試飲する
+        adopted: true
+        why: 基準の元になる合格の実績を、マスターの舌で確実に積み上げられる
+      - name: master-sets-initial
+        label: マスターが最初の基準を手で決める
+        why_not: 回答者は選ばなかった（理由は未確認）
+      - name: agent-borrows-similar
+        label: 似た豆の実績を借りて店のAIが仮の基準を置く
+        why_not: 回答者は選ばなかった（理由は未確認）
+    affects:
+      - roasting
+    note: 実績がたまったあとの切り替えはD28で確定（マスターが判断）。理由づけはAIが補った仮置き
+  - id: D28
+    topic: 全数試飲から店のAIの基準へ切り替える判断
+    chosen: master-judges-ready
+    options:
+      - name: master-judges-ready
+        label: マスターが「もう大丈夫」と判断したときに切り替える
+        adopted: true
+        why: 豆へのこだわりを持つマスターの納得を、切り替えの最後の関門にできる
+      - name: switch-after-consecutive-passes
+        label: 豆ごとに合格が数回続いたら切り替える
+        why_not: 回答者は選ばなかった（理由は未確認）
+      - name: agent-judges-by-volume
+        label: 店のAIが実績の量を見て判断する
+        why_not: 回答者は選ばなかった（理由は未確認）
+    affects:
+      - roasting
+    note: 選択肢は回答者が選んだもの。理由づけはAIが補った仮置きで、回答者に未確認
+  - id: D29
+    topic: マスターが忙しくて手が回らないときの最後の一手
+    chosen: omit-final-touch-when-busy
+    options:
+      - name: omit-final-touch-when-busy
+        label: 忙しいときは最後の一手を省略する
+        adopted: true
+        why: 客を待たせることを避け、店の流れを止めない
+      - name: wait-and-master-does
+        label: 客に待ってもらうよう案内して必ずマスターが行う
+        why_not: 回答者は選ばなかった（理由は未確認）
+      - name: robot-substitutes
+        label: 忙しいときはロボットが代わりに行う
+        why_not: 回答者は選ばなかった（理由は未確認）
+    affects:
+      - ordering
+      - retail
+      - subscription
+    note: 選択肢は回答者が選んだもの。理由づけはAIが補った仮置きで、回答者に未確認
+  - id: D30
+    topic: ロボット停止時のマスターへの切り替え
+    chosen: master-notices-visually
+    options:
+      - name: master-notices-visually
+        label: 通知はしない。マスターが目で見て気づく
+        adopted: true
+        why: 店が小さく、マスターが常に店内にいる前提で、通知の仕組みを持たずに済む
+      - name: agent-notifies-master
+        label: 店のAIがマスターに通知しマスターが手動に切り替える
+        why_not: 回答者は選ばなかった（理由は未確認）
+      - name: agent-auto-minimal
+        label: 店のAIが自動で最低限の運転に切り替えマスターを呼ぶ
+        why_not: 回答者は選ばなかった（理由は未確認）
+    affects:
+      - operations
+    note: 客への案内は店のAIが行う（D17）。理由づけはAIが補った仮置き
+  - id: D31
+    topic: 持ち帰りドリンクの取り扱い
+    chosen: no-takeout
+    options:
+      - name: no-takeout
+        label: 持ち帰りドリンクは扱わない
+        adopted: true
+        why: 店内で飲む体験と最後の一手の温かみを守れる
+      - name: handle-takeout
+        label: 持ち帰りドリンクも扱う（店内と同じ流れ）
+        why_not: 回答者は選ばなかった（理由は未確認）
+    affects:
+      - ordering
+    note: 選択肢は回答者が選んだもの。理由づけはAIが補った仮置きで、回答者に未確認
+  - id: D32
+    topic: 焙煎の1回分をどこまで追うか
+    chosen: trace-roast-to-handover
+    options:
+      - name: trace-roast-to-handover
+        label: 焙煎から客に渡すまで追える
+        adopted: true
+        why: 鮮度の3日ルールと品質の保証を、客に渡す最後まで確かめられる
+      - name: trace-from-green-bean-arrival
+        label: 生豆の入荷までさかのぼって追える
+        why_not: 回答者は選ばなかった（理由は未確認）
+      - name: trace-both
+        label: 入荷から客に渡すまで両方追える
+        why_not: 回答者は選ばなかった（理由は未確認）
+      - name: no-trace
+        label: 追わない（在庫の量だけ見る）
+        why_not: 回答者は選ばなかった（理由は未確認）
+    affects:
+      - roasting
+      - retail
+      - subscription
+      - RoastBatch
+    note: 選択肢は回答者が選んだもの。理由づけはAIが補った仮置きで、回答者に未確認
+  - id: D33
+    topic: 生豆の在庫の数え方
+    chosen: count-per-arrival
+    options:
+      - name: count-per-arrival
+        label: 入荷ごと（いつ届いたかごと）に数える
+        adopted: true
+        why: 伝票との照合や鮮度の管理を、入荷の単位でできる
+      - name: count-per-bean-type
+        label: 豆の種類ごとに合計の量を数える
+        why_not: 回答者は選ばなかった（理由は未確認）
+      - name: count-both
+        label: 両方（種類ごとの合計と入荷ごとの内訳）
+        why_not: 回答者は選ばなかった（理由は未確認）
+    affects:
+      - sourcing
+      - GreenBeansLot
+    note: 選択肢は回答者が選んだもの。理由づけはAIが補った仮置きで、回答者に未確認
+  - id: D34
+    topic: 袋に付ける焙煎の目印
+    chosen: robot-labels-roast-date
+    options:
+      - name: robot-labels-roast-date
+        label: 焙煎日はロボットがラベルで付け、メッセージだけマスターが決める
+        adopted: true
+        why: 忙しくてメッセージを省略しても、焙煎日が必ず袋に載り、焙煎から3日以内を客が確かめられる
+      - name: master-writes-roast-date
+        label: マスターが手書きのメッセージとあわせて焙煎日を書く
+        why_not: 最初に選ばれたが、忙しくてメッセージを省略すると焙煎日も消えることが分かり、Q10の回答で選び直された
+      - name: print-label
+        label: ラベルに焙煎日と豆の名前を印字する
+        why_not: 回答者は選ばなかった（理由は未確認）
+      - name: no-mark
+        label: 目印は付けない（店側の記録で追う）
+        why_not: 回答者は選ばなかった（理由は未確認）
+    affects:
+      - retail
+      - subscription
+    note: Q10の回答で、マスターが書く案から、ロボットがラベルで付ける案に変更。理由づけはAIが補った仮置き
+  - id: D35
+    topic: 選択の基準になる顧客像
+    chosen: fusion-customer
+    options:
+      - name: fusion-customer
+        label: 昔ながらの手作業好きかつメカ好きの顧客（メカ好きは人のぬくもりを、ぬくもり好きはメカっぽさを好きになっていく）
+        adopted: true
+        why: 店の強み（手職人とフィジカルAIの融合）を一人の客の中で成り立たせる。機械の確かさと人の手の温かみを、どちらも体験できる設計を選ぶ基準にする
+      - name: mechanical-only
+        label: 効率を重視するメカ好きの客だけ
+        why_not: 温かみが店の強みなので、人の手を残す理由がなくなる
+      - name: handmade-only
+        label: 手作業の温かみだけを求める客だけ
+        why_not: フィジカルAIの確かさや安定を活かせない
+    affects:
+      - ordering
+      - roasting
+      - retail
+      - subscription
+    note: オーナーの指示で、昔ながらの手作業好きかつメカ好きの顧客像に沿ってAIが選んだ。オーナー本人が確認済み（パネルの質問 q-20261128-46）。理由づけはAIが補った仮置き
+  - id: D36
+    topic: 定期便の休止・解約をいつまで受け付けるか
+    chosen: anytime-before-next-shipment
+    options:
+      - name: anytime-before-next-shipment
+        label: いつでも。次の発送をする前なら休む・やめるを受け付ける
+        adopted: true
+        why: 休止や解約はロボットが即座に受け付けて待たせず、受け付けたあとの返事はマスターの手書きの一言にもできる。機械の気軽さと人の手の温かみが両立する
+      - name: before-next-roast
+        label: 次の焙煎を始める前まで（これ以降は次の回から）
+        why_not: 客から見て締切が分かりにくく、機械的に感じる
+      - name: fixed-day-of-month
+        label: 月初めの決まった日まで
+        why_not: 客の都合より店の都合が前に出る
+    affects:
+      - subscription
+      - Subscription
+    note: オーナーの指示で、昔ながらの手作業好きかつメカ好きの顧客像に沿ってAIが選んだ。オーナー本人が確認済み（パネルの質問 q-20261128-46）。理由づけはAIが補った仮置き
+  - id: D37
+    topic: 注文の変更・取り消しをいつまで受け付けるか
+    chosen: before-brewing
+    options:
+      - name: before-brewing
+        label: ドリンクを淹れ始める前まで変更・取り消しできる
+        adopted: true
+        why: ロボットが淹れ始めるまでは気軽に直せ、淹れ始めたら手間をかけた一杯を大事にする
+      - name: before-payment
+        label: 支払いが済む前だけ
+        why_not: 自動支払いは一瞬で済むので、実質ほぼ変更できなくなる
+      - name: no-change
+        label: 変更・取り消しはできない
+        why_not: 間違いに気づいても直せず、体験が硬くなる
+    affects:
+      - ordering
+      - Order
+    note: オーナーの指示で、昔ながらの手作業好きかつメカ好きの顧客像に沿ってAIが選んだ。オーナー本人が確認済み（パネルの質問 q-20261128-46）。理由づけはAIが補った仮置き
+  - id: D38
+    topic: 好みの記録をやめてほしいと言われたときの扱い
+    chosen: erase-immediately
+    options:
+      - name: erase-immediately
+        label: すぐに削除する
+        adopted: true
+        why: ロボットが言われたその場で確実に消し、「ありがとうございました、またいつでも」と温かく返せる。許可を取って記録するという約束を最後まで守る
+      - name: keep-but-stop-using
+        label: 削除はせず、今後は使わない
+        why_not: 客から見て消えたかどうか分からず、不安が残る
+      - name: confirm-before-erase
+        label: 削除する前に、客に確認する
+        why_not: やめたい客にもう一手間をかけさせる
+    affects:
+      - ordering
+      - CustomerPreference
+    note: オーナーの指示で、昔ながらの手作業好きかつメカ好きの顧客像に沿ってAIが選んだ。オーナー本人が確認済み（パネルの質問 q-20261128-46）。理由づけはAIが補った仮置き
+  - id: D39
+    topic: 生豆の補充の目安を誰が決めるか
+    chosen: master-sets-green-level-per-bean
+    options:
+      - name: master-sets-green-level-per-bean
+        label: マスターが豆ごとに決める（焙煎済み在庫の目安と同じ決め方）
+        adopted: true
+        why: 豆ごとに流通量や鮮度の保ち方が違い、豆を選ぶマスターが一番分かる。焙煎済み在庫の目安（D12）と同じ決め方に揃えて、店の人に分かりやすい
+      - name: ai-decides-from-usage
+        label: 店のAIが使われ方から自動で決める
+        why_not: 豆へのこだわりをマスターが手放す形になる
+      - name: uniform-level
+        label: 一律の目安にする
+        why_not: 豆ごとの違いを反映できない
+    affects:
+      - sourcing
+      - GreenBeansLot
+      - GreenBeansStockLevel
+    note: オーナーの指示で、昔ながらの手作業好きかつメカ好きの顧客像に沿ってAIが選んだ。オーナー本人が確認済み（パネルの質問 q-20261128-46）。理由づけはAIが補った仮置き
+  - id: D40
+    topic: 支払いに失敗したまま客が離れたとき、放棄とみなす時間
+    chosen: abandoned-after-10-minutes
+    options:
+      - name: abandoned-after-10-minutes
+        label: 10分
+        adopted: true
+        why: 客が別の支払い方法を試す余裕がありつつ、いつまでも注文が残らない
+      - name: abandoned-after-5-minutes
+        label: 5分
+        why_not: 回答者は選ばなかった（理由は未確認）
+      - name: abandoned-after-30-minutes
+        label: 30分
+        why_not: 回答者は選ばなかった（理由は未確認）
+    affects:
+      - ordering
+      - Order
+      - CancelAbandonedOrder
+    note: 回答者本人の選択（パネルの質問 q-20261128-47）。理由づけはAIが補った仮置き
+contexts:
+  - name: sourcing
+    label_ja: 仕入れ
+    lang:
+      actors:
+        Master: マスター
+        ShopAgent: 店のAIエージェント
+      cmds:
+        SelectGreenBeans: 生豆を選ぶ
+        PlaceGreenBeansOrder: 生豆を発注する
+        ReceiveGreenBeans: 生豆を受け入れる
+        InquireSupplierDiscrepancy: 伝票との不一致を仕入れ先に問い合わせる
+        CheckGreenBeansStock: 生豆の在庫を確認する
+      evts:
+        GreenBeansSelected: 生豆が選ばれた
+        GreenBeansOrdered: 生豆が発注された
+        GreenBeansReceived: 生豆が入荷し在庫に加わった
+        SupplierInquirySent: 仕入れ先に問い合わせた
+        GreenBeansStockLow: 生豆の在庫が減った
+        DiscrepancyDetected: 伝票との不一致が見つかった
+      pols:
+        AutoReorderGreenBeansOnLowStock: 生豆が減ったら自動で補充発注する
+        InquireSupplierOnDiscrepancy: 伝票と合わなければ仕入れ先に問い合わせる
+      vos:
+        GreenBeans: 生豆
+      aggs:
+        GreenBeansLot: 生豆ロット
+      states:
+        ORDERED: 発注済み
+        RECEIVED: 入荷済み
+        DISCREPANCY_REPORTED: 不一致を問い合わせ中
+      qrys:
+        GreenBeansStockLevel: 生豆の在庫の量
+    sub: supporting-operations
+    aggs:
+      - GreenBeansLot
+    up: []
+    dn:
+      - ctx: roasting
+        rel: Customer-Supplier
+        note: 入荷した生豆を焙煎に供給する
+    description: "**境界の理由**: 「生豆」を扱う言葉の範囲。焙煎済みの「焙煎豆」とは別に呼び分ける。\n- マスターが生豆を選び、店のAIエージェントが発注と入荷の照合を行う\n- 在庫は入荷ごとに数え、自動補充の対象はマスターが選んだことのある豆に限る\n"
+  - name: roasting
+    label_ja: 焙煎
+    lang:
+      actors:
+        RoastingRobot: 焙煎ロボット
+        Master: マスター
+      cmds:
+        RoastBeans: 生豆を焙煎する
+        MeasureRoast: 焙煎結果を測定する
+        TasteFlaggedRoast: 基準外の豆を試飲する
+        DiscardRoast: 不合格の豆を廃棄する
+        CheckRoastedStock: 焙煎済み在庫を確認する
+        DefineRestockLevel: 在庫の目安を決める
+        ActivateAutomatedCriteria: 店のAIの基準に切り替える
+      evts:
+        BeansRoasted: 豆が焙煎された
+        RoastApproved: 測定で合格した
+        RoastFlaggedForTasting: 試飲が必要と判定された
+        RoastApprovedByMaster: マスターが合格とした
+        RoastRejected: マスターが不合格とした
+        RoastDiscarded: 不合格の豆が廃棄された
+        RoastedStockLow: 焙煎済み在庫が減った
+        StockThresholdSet: 在庫の目安が決まった
+        AutomatedCriteriaActivated: 店のAIの基準に切り替わった
+      pols:
+        AutoInstructRoastingOnLowStock: 在庫が減ったら自動で焙煎を指示する
+      vos:
+        GreenBeans: 生豆
+        RoastedBeans: 焙煎豆
+      aggs:
+        RoastBatch: 焙煎ロット
+      states:
+        ROASTED: 焙煎済み
+        FLAGGED_FOR_TASTING: 試飲待ち
+        APPROVED: 合格
+        REJECTED: 不合格
+        DISCARDED: 廃棄済み
+      qrys:
+        FreshRoastedBeansForSale: 渡してよい焙煎豆の一覧
+        RoastedStockLevel: 焙煎済み在庫の量
+    sub: roasting-craft
+    aggs:
+      - RoastBatch
+    up:
+      - ctx: sourcing
+        rel: Customer-Supplier
+        note: 生豆の供給を受ける
+    dn:
+      - ctx: retail
+        rel: Customer-Supplier
+        note: 渡してよい焙煎豆の一覧と焙煎ロット番号を提供する
+      - ctx: subscription
+        rel: Customer-Supplier
+        note: 渡してよい焙煎豆の一覧と焙煎ロット番号を提供する
+      - ctx: ordering
+        rel: Customer-Supplier
+        note: 渡してよい焙煎豆の一覧を提供する
+    description: "**境界の理由**: 店の中核。「焙煎豆」と、焙煎の合否・鮮度（焙煎から3日以内）を扱う。\n- 焙煎ロボットが焙煎と測定を行い、基準外の豆はマスターが試飲する\n- 基準は過去の合格データから店のAIが決め、実績がたまるまでは全部をマスターが試飲する\n"
+  - name: ordering
+    label_ja: 注文と接客
+    lang:
+      actors:
+        Customer: 客
+        CustomerAgent: 客のアプリやAI
+        ReceptionRobot: 接客ロボット
+        DrinkRobot: ドリンクロボット
+      cmds:
+        PlaceOrder: 注文する
+        Pay: 支払う
+        RecordPreference: 好みを記録する
+        ProposeAlternativeBeans: 代わりの豆を提案する
+        BrewDrink: ドリンクを淹れる
+        GuideAlternativePayment: 別の支払い方法を案内する
+        FinishDrink: ドリンクの最後の一手を加える
+        CancelOrder: 注文を取り消す
+        EraseCustomerPreference: 好みの記録を削除する
+        CancelAbandonedOrder: 放棄された注文を取り消す
+        RefundPayment: 支払いを返金する
+      evts:
+        OrderPlaced: 注文された
+        PaymentCompleted: 支払いが完了した
+        PreferenceRecorded: 好みが記録された
+        AlternativeBeansProposed: 代わりの豆が提案された
+        DrinkBrewed: ドリンクが淹れられた
+        PaymentFailed: 支払いに失敗した
+        AlternativePaymentGuided: 別の支払い方法が案内された
+        DrinkFinished: ドリンクが仕上げられた
+        OrderCancelled: 注文が取り消された
+        CustomerPreferenceErased: 好みの記録が削除された
+        AbandonedOrderCancelled: 放棄された注文が取り消された
+        PaymentRefunded: 支払いが返金された
+      pols:
+        GuideAlternativePaymentOnFailure: 支払いに失敗したら別の支払い方法を案内する
+        RefundOnPaidOrderCancellation: 支払い済みの注文が取り消されたら返金する
+      aggs:
+        Order: 注文
+        CustomerPreference: 客の好み
+      states:
+        PLACED: 注文済み
+        PAID: 支払い済み
+        PAYMENT_FAILED: 支払い失敗
+        BREWED: 淹れ済み
+        FINISHED: 仕上げ済み
+        CANCELLED: 注文の取り消し済み
+        RECORDED: 記録中
+        ERASED: 削除済み
+    sub: supporting-operations
+    aggs:
+      - Order
+      - CustomerPreference
+    up:
+      - ctx: roasting
+        rel: Customer-Supplier
+        note: 焙煎豆の一覧と焙煎ロット番号の提供を受ける
+    dn: []
+    description: "**境界の理由**: 店内で飲むドリンクの注文と接客の言葉の範囲。\n- 接客ロボットが好みを記録し、代わりの豆を提案し、支払い失敗時に案内する\n- 豆の在庫切れ時の提案も、接客の一部としてここで扱う（豆の購入そのものは retail）\n- ドリンクはドリンクロボットが淹れ、最後の一手はマスターが行う（忙しいときは省略）\n"
+  - name: retail
+    label_ja: 豆の小売り
+    lang:
+      actors:
+        Customer: 客
+        PackingRobot: 詰めロボット
+      cmds:
+        PurchaseBeans: 豆を買う
+        WeighAndPackBeans: 豆を量って詰める
+        WriteHandwrittenMessage: 手書きのメッセージを添える
+      evts:
+        BeansPurchased: 豆が購入された
+        BeansPacked: 豆が量られて詰められた
+        HandwrittenMessageWritten: 手書きのメッセージが添えられた
+      vos:
+        RoastedBeans: 焙煎豆
+    sub: bean-retail-craft
+    up:
+      - ctx: roasting
+        rel: Customer-Supplier
+        note: 焙煎豆の一覧と焙煎ロット番号の提供を受ける
+    dn: []
+    description: "**境界の理由**: 焙煎した豆の量り売り・袋売りの言葉の範囲。店の中核の一つ。\n- 詰めロボットが量って詰め、焙煎日のラベルを付ける\n- マスターが手書きのメッセージを添える（忙しいときは省略）\n"
+  - name: subscription
+    label_ja: 豆の定期便
+    lang:
+      actors:
+        Customer: 客
+        Master: マスター
+        DeliveryCarrier: 配送業者
+        PackingRobot: 詰めロボット
+      cmds:
+        SubscribeBeans: 定期便を申し込む
+        SelectMonthlyBeans: 今月の豆を選ぶ
+        PackSubscriptionBeans: 定期便の豆を詰める
+        DeliverSubscriptionBeans: 定期便を客に届ける
+        WriteSubscriptionMessage: 定期便に手書きのメッセージを添える
+        PauseSubscription: 定期便を休止する
+        ResumeSubscription: 定期便を再開する
+        CancelSubscription: 定期便をやめる
+      evts:
+        SubscriptionStarted: 定期便が始まった
+        MonthlyBeansSelected: 今月の豆が選ばれた
+        SubscriptionBeansPacked: 定期便の豆が詰められた
+        SubscriptionBeansDelivered: 定期便が客に届いた
+        SubscriptionMessageWritten: 定期便に手書きのメッセージが添えられた
+        SubscriptionPaused: 定期便が休止された
+        SubscriptionResumed: 定期便が再開された
+        SubscriptionCancelled: 定期便がやめられた
+      vos:
+        RoastedBeans: 焙煎豆
+      aggs:
+        Subscription: 定期便
+      states:
+        ACTIVE: 継続中
+        PAUSED: 休止中
+        PACKING: 発送準備中
+        CANCELLED: 解約済み
+    sub: supporting-operations
+    aggs:
+      - Subscription
+    up:
+      - ctx: roasting
+        rel: Customer-Supplier
+        note: 焙煎豆の一覧と焙煎ロット番号の提供を受ける
+    dn: []
+    description: "**境界の理由**: 豆の定期便の契約（申し込み、休止、再開、解約）と毎月の発送の言葉の範囲。\n- マスターが毎月の豆を選び、詰めロボットが詰め、発送は外部の配送業者が行う\n- 発送するときまでに焙煎から3日以内の豆だけを詰める\n"
+  - name: operations
+    label_ja: 店の運用監視
+    lang:
+      actors:
+        ShopAgent: 店のAIエージェント
+        Master: マスター
+      cmds:
+        DetectOutage: 機器の停止を検知する
+        NotifyCustomerOfOutage: 停止を客に伝える
+        SwitchToManualOperation: 手動運転に切り替える
+        RestoreAutomaticOperation: 自動運転に戻す
+      evts:
+        OutageDetected: 機器の停止が検知された
+        CustomerNotifiedOfOutage: 停止が客に伝えられた
+        ManualOperationStarted: 手動運転が始まった
+        AutomaticOperationRestored: 自動運転に戻った
+      pols:
+        NotifyCustomerOnOutage: 停止を検知したら客に伝えて代わりの対応を案内する
+    sub: supporting-operations
+    up: []
+    dn: []
+    description: "**境界の理由**: 店の運用監視。機器の停止の検知と客への案内、手動運転への切り替えの言葉の範囲。\n- 店のAIエージェントが停止を検知し、客に状況を伝える\n- 手動運転への切り替えはマスターが目で見て気づいて行う\n"
+policies:
+  - name: AutoInstructRoastingOnLowStock
+    ctx: roasting
+    trg: RoastedStockLow
+    cmd: RoastBeans
+    evt: BeansRoasted
+    agg: RoastBatch
+  - name: AutoReorderGreenBeansOnLowStock
+    ctx: sourcing
+    trg: GreenBeansStockLow
+    cmd: PlaceGreenBeansOrder
+    evt: GreenBeansOrdered
+    note: 対象はマスターが選んだことのある豆に限る（D15）
+    agg: GreenBeansLot
+  - name: GuideAlternativePaymentOnFailure
+    ctx: ordering
+    trg: PaymentFailed
+    cmd: GuideAlternativePayment
+    evt: AlternativePaymentGuided
+  - name: NotifyCustomerOnOutage
+    ctx: operations
+    trg: OutageDetected
+    cmd: NotifyCustomerOfOutage
+    evt: CustomerNotifiedOfOutage
+  - name: InquireSupplierOnDiscrepancy
+    ctx: sourcing
+    trg: DiscrepancyDetected
+    cmd: InquireSupplierDiscrepancy
+    evt: SupplierInquirySent
+    agg: GreenBeansLot
+  - name: RefundOnPaidOrderCancellation
+    ctx: ordering
+    trg: OrderCancelled
+    cmd: RefundPayment
+    evt: PaymentRefunded
+    agg: Order
+    note: 支払い済みの注文を取り消したときだけ返金する
+domains:
+  - name: coffee-shop
+    vision: フィジカルAIと手職人の融合で、豆にこだわる店を温かみのある形で切り盛りする
+    subs:
+      - name: roasting-craft
+        type: CORE_SUBDOMAIN
+        vision: 生豆を焙いて合否を判定する。手職人の目と舌をフィジカルAIに結びつける、店の強みの中心
+      - name: bean-retail-craft
+        type: CORE_SUBDOMAIN
+        vision: 焙煎した豆を袋詰めし手書きのメッセージを添えて渡す。温かみが残る場面
+      - name: supporting-operations
+        type: SUPPORTING_SUBDOMAIN
+        vision: 仕入れ・注文と接客・定期便・店の運用監視。店を回すために必要だが、強みの中心ではない
+aggregates:
+  - name: RoastBatch
+    ctx: roasting
+    purpose: 焙煎の1回分を一つのまとまりとして扱い、焙煎した日時・測定値・合否を記録して、焙煎から客に渡すまで追えるようにする。
+    background: 豆にこだわる店なので、どの生豆をいつ焙煎し、どう合否が決まったかを辿れることが品質と鮮度の保証になる。焙煎から3日以内の判定は、焙煎日時から計算するリードモデル（FreshRoastedBeansForSale）で、詰める側が行う。
+    constraints:
+      - 焙煎の日時は必ず記録する
+      - 合否が決まるまで客に渡さない
+      - 不合格になった豆は廃棄する
+    states:
+      - ROASTED
+      - FLAGGED_FOR_TASTING
+      - APPROVED
+      - REJECTED
+      - DISCARDED
+    terminalStates:
+      - APPROVED
+      - DISCARDED
+    transitions:
+      - from: ROASTED
+        to: APPROVED
+        via: MeasureRoast
+        when: 測定値が基準内
+      - from: ROASTED
+        to: FLAGGED_FOR_TASTING
+        via: MeasureRoast
+        when: 測定値が基準外
+      - from: FLAGGED_FOR_TASTING
+        to: APPROVED
+        via: TasteFlaggedRoast
+        when: マスターが合格と判断
+      - from: FLAGGED_FOR_TASTING
+        to: REJECTED
+        via: TasteFlaggedRoast
+        when: マスターが不合格と判断
+      - from: REJECTED
+        to: DISCARDED
+        via: DiscardRoast
+    attrs:
+      - name: roastBatchId
+        type: string
+        required: true
+        note: 焙煎ロット番号。詰め・配送側がこの番号を持つことで、客に渡すまで追える
+      - name: beanType
+        type: string
+        required: true
+      - name: roastedAt
+        type: datetime
+        required: true
+        note: 焙煎から3日以内の判定に使う
+      - name: measurement
+        type: string
+        required: false
+      - name: tasteVerdict
+        type: string
+        required: false
+    events:
+      - name: BeansRoasted
+        params:
+          - name: roastBatchId
+            type: string
+            required: true
+          - name: beanType
+            type: string
+            required: true
+          - name: roastedAt
+            type: datetime
+            required: true
+      - name: RoastApproved
+        params:
+          - name: roastBatchId
+            type: string
+            required: true
+      - name: RoastFlaggedForTasting
+        params:
+          - name: roastBatchId
+            type: string
+            required: true
+      - name: RoastApprovedByMaster
+        params:
+          - name: roastBatchId
+            type: string
+            required: true
+      - name: RoastRejected
+        params:
+          - name: roastBatchId
+            type: string
+            required: true
+      - name: RoastDiscarded
+        params:
+          - name: roastBatchId
+            type: string
+            required: true
+        terminal: true
+    note: 客に渡すまでの追跡は、BCをまたぐため、詰め・配送側が焙煎ロット番号を持つことで実現する（D32）
+  - name: GreenBeansLot
+    ctx: sourcing
+    purpose: 生豆の入荷1回分を一つのまとまりとして扱い、発注から入荷、伝票との照合までを記録して、どの入荷の生豆かを追えるようにする。
+    background: 生豆の在庫は入荷ごとに数えると決めた。伝票と合わない入荷の問い合わせや、豆の鮮度の管理を、入荷の単位で行うため。
+    constraints:
+      - 入荷の日付と数量は必ず記録する
+      - 伝票と合わない入荷は在庫に加えず仕入れ先に問い合わせる
+      - 自動補充の対象はマスターが選んだことのある豆に限る
+    states:
+      - ORDERED
+      - RECEIVED
+      - DISCREPANCY_REPORTED
+    terminalStates:
+      - RECEIVED
+    transitions:
+      - from: ORDERED
+        to: RECEIVED
+        via: ReceiveGreenBeans
+        when: 伝票と一致
+      - from: ORDERED
+        to: DISCREPANCY_REPORTED
+        via: InquireSupplierDiscrepancy
+        when: 伝票と不一致
+      - from: DISCREPANCY_REPORTED
+        to: RECEIVED
+        via: ReceiveGreenBeans
+        when: 仕入れ先との確認が済んだ
+    attrs:
+      - name: greenBeansLotId
+        type: string
+        required: true
+      - name: beanType
+        type: string
+        required: true
+      - name: receivedAt
+        type: datetime
+        required: false
+      - name: quantity
+        type: number
+        required: true
+    events:
+      - name: GreenBeansOrdered
+        params:
+          - name: greenBeansLotId
+            type: string
+            required: true
+          - name: beanType
+            type: string
+            required: true
+          - name: quantity
+            type: number
+            required: true
+      - name: GreenBeansReceived
+        params:
+          - name: greenBeansLotId
+            type: string
+            required: true
+          - name: receivedAt
+            type: datetime
+            required: true
+        terminal: true
+      - name: SupplierInquirySent
+        params:
+          - name: greenBeansLotId
+            type: string
+            required: true
+      - name: DiscrepancyDetected
+        params:
+          - name: greenBeansLotId
+            type: string
+            required: true
+  - name: Subscription
+    ctx: subscription
+    purpose: 客ごとの豆の定期便を一つの契約として扱い、申し込みから休止・再開・解約、毎月の豆選びと発送までの状態を管理する。
+    background: 定期便は、焙煎から発送までの鮮度の線引き（発送時点で焙煎から3日以内）と、マスターが毎月豆を選ぶ温かみの両方を守る必要がある。客はいつでも、次の発送前なら休止や解約ができる。
+    constraints:
+      - 次の発送前なら休止・解約を受け付ける
+      - 発送時点で焙煎から3日以内の豆だけを詰める
+      - 今月の豆はマスターが選ぶ
+    states:
+      - ACTIVE
+      - PAUSED
+      - CANCELLED
+      - PACKING
+    terminalStates:
+      - CANCELLED
+    transitions:
+      - from: ACTIVE
+        to: PAUSED
+        via: PauseSubscription
+        when: 客が次の発送前に休止を申し出た
+      - from: PAUSED
+        to: ACTIVE
+        via: ResumeSubscription
+        when: 客が再開を申し出た
+      - from: ACTIVE
+        to: CANCELLED
+        via: CancelSubscription
+        when: 客が次の発送前に解約を申し出た
+      - from: PAUSED
+        to: CANCELLED
+        via: CancelSubscription
+        when: 客が解約を申し出た
+      - from: ACTIVE
+        to: PACKING
+        via: PackSubscriptionBeans
+        when: 今月の発送の詰めを始めた
+      - from: PACKING
+        to: ACTIVE
+        via: DeliverSubscriptionBeans
+        when: 配送業者が客に届けた
+    attrs:
+      - name: subscriptionId
+        type: string
+        required: true
+      - name: customerId
+        type: string
+        required: true
+    events:
+      - name: SubscriptionStarted
+        params:
+          - name: subscriptionId
+            type: string
+            required: true
+          - name: customerId
+            type: string
+            required: true
+      - name: SubscriptionPaused
+        params:
+          - name: subscriptionId
+            type: string
+            required: true
+      - name: SubscriptionResumed
+        params:
+          - name: subscriptionId
+            type: string
+            required: true
+      - name: SubscriptionCancelled
+        params:
+          - name: subscriptionId
+            type: string
+            required: true
+        terminal: true
+      - name: MonthlyBeansSelected
+        params:
+          - name: subscriptionId
+            type: string
+            required: true
+      - name: SubscriptionBeansPacked
+        params:
+          - name: subscriptionId
+            type: string
+            required: true
+      - name: SubscriptionBeansDelivered
+        params:
+          - name: subscriptionId
+            type: string
+            required: true
+      - name: SubscriptionMessageWritten
+        params:
+          - name: subscriptionId
+            type: string
+            required: true
+  - name: Order
+    ctx: ordering
+    purpose: 店内で飲むドリンクの注文1件を一つのまとまりとして扱い、注文から支払い、淹れる、最後の一手までの状態を管理する。
+    background: 客のアプリやAIが自動で支払い、ドリンクを淹れるのはロボット、最後の一手はマスター（忙しいときは省略）と決めた。淹れ始める前なら、客は変更や取り消しができる。
+    constraints:
+      - 支払いが済むまでドリンクは淹れない
+      - 淹れ始めたあとは取り消せない
+      - 最後の一手はマスターが忙しいとき省略してよい
+    states:
+      - PLACED
+      - PAID
+      - PAYMENT_FAILED
+      - BREWED
+      - FINISHED
+      - CANCELLED
+    terminalStates:
+      - FINISHED
+      - CANCELLED
+    transitions:
+      - from: PLACED
+        to: PAID
+        via: Pay
+        when: 支払いに成功
+      - from: PLACED
+        to: PAYMENT_FAILED
+        via: Pay
+        when: 支払いに失敗
+      - from: PAYMENT_FAILED
+        to: PAID
+        via: Pay
+        when: 別の支払い方法で成功
+      - from: PAID
+        to: BREWED
+        via: BrewDrink
+      - from: BREWED
+        to: FINISHED
+        via: FinishDrink
+        when: マスターが最後の一手を加えた
+      - from: PLACED
+        to: CANCELLED
+        via: CancelOrder
+      - from: PAYMENT_FAILED
+        to: CANCELLED
+        via: CancelOrder
+      - from: PAID
+        to: CANCELLED
+        via: CancelOrder
+        when: 淹れ始める前
+      - from: PAYMENT_FAILED
+        to: CANCELLED
+        via: CancelAbandonedOrder
+        when: 支払いに失敗したまま10分が過ぎた
+    attrs:
+      - name: orderId
+        type: string
+        required: true
+      - name: customerId
+        type: string
+        required: true
+    events:
+      - name: OrderPlaced
+        params:
+          - name: orderId
+            type: string
+            required: true
+      - name: PaymentCompleted
+        params:
+          - name: orderId
+            type: string
+            required: true
+      - name: PaymentFailed
+        params:
+          - name: orderId
+            type: string
+            required: true
+      - name: DrinkBrewed
+        params:
+          - name: orderId
+            type: string
+            required: true
+      - name: DrinkFinished
+        params:
+          - name: orderId
+            type: string
+            required: true
+        terminal: true
+      - name: OrderCancelled
+        params:
+          - name: orderId
+            type: string
+            required: true
+        terminal: true
+      - name: AlternativePaymentGuided
+        params:
+          - name: orderId
+            type: string
+            required: true
+      - name: AbandonedOrderCancelled
+        params:
+          - name: orderId
+            type: string
+            required: true
+        terminal: true
+      - name: PaymentRefunded
+        params:
+          - name: orderId
+            type: string
+            required: true
+  - name: CustomerPreference
+    ctx: ordering
+    purpose: 客の好みの記録を、客の許可の範囲で持ち、許可が取り消されたらすぐ削除する。
+    background: 好みは客の許可を取って記録すると決めた。客が記録をやめてほしいと言ったときは、すぐに削除する。
+    constraints:
+      - 客の許可があるときだけ記録し使う
+      - 許可が取り消されたらすぐ削除する
+    states:
+      - RECORDED
+      - ERASED
+    terminalStates:
+      - ERASED
+    transitions:
+      - from: RECORDED
+        to: ERASED
+        via: EraseCustomerPreference
+        when: 客が記録をやめてほしいと言った
+    attrs:
+      - name: customerId
+        type: string
+        required: true
+      - name: preferences
+        type: string
+        required: true
+      - name: consentGivenAt
+        type: datetime
+        required: true
+    events:
+      - name: PreferenceRecorded
+        params:
+          - name: customerId
+            type: string
+            required: true
+          - name: consentGivenAt
+            type: datetime
+            required: true
+      - name: CustomerPreferenceErased
+        params:
+          - name: customerId
+            type: string
+            required: true
+        terminal: true
+queries:
+  - name: FreshRoastedBeansForSale
+    ctx: roasting
+    purpose: 客に渡してよい焙煎豆（合格かつ焙煎から3日以内）の一覧を出す。
+    users: 接客ロボット・詰めロボット
+    sources:
+      - RoastBatch
+    formula: 状態が合格で、現在の日時と焙煎日時の差が3日以内の焙煎ロットを豆ごとにまとめる
+  - name: RoastedStockLevel
+    ctx: roasting
+    purpose: 豆ごとの焙煎済み在庫の量を出し、マスターが決めた目安と比べる。
+    users: 店のAIエージェント
+    sources:
+      - RoastBatch
+    formula: 合格した焙煎ロットの量を豆ごとに合計し、マスターが豆ごとに決めた目安と比べる
+  - name: GreenBeansStockLevel
+    ctx: sourcing
+    purpose: 生豆の在庫の量を、豆の種類ごとに出して補充の要否を判断する。
+    users: 店のAIエージェント
+    sources:
+      - GreenBeansLot
+    formula: 入荷済みの生豆ロットの残量を豆の種類ごとに合計し、補充の目安と比べる。対象はマスターが選んだことのある豆に限る
+actions:
+  - id: A1
+    text: AIが顧客像に沿って選んだ決定（D35〜D39）と、AIが補った理由づけを、オーナー本人が確認する
+    owner: オーナー
+    done: true
+  - id: A2
+    text: 実績がたまるまでの全数試飲で、焙煎の合否の基準データを集める計画を立てる
+    owner: マスター
+    done: false
+  - id: A3
+    text: 支払いと配送の既存サービスを選ぶ（D20）
+    owner: オーナー
+    done: false
+  - id: A4
+    text: 支払いに失敗したまま客が離れたとき、放棄とみなす時間を10分とする（D40）
+    owner: オーナー
+    done: true
+  - id: A5
+    text: 客が離れたことをどう検知するかを決める（支払い失敗から10分で注文を取り消す前提）
+    owner: オーナー
+    done: false
