@@ -458,6 +458,28 @@
     .hotspot strong, .question strong { display: inline-block; min-width: 38px; }
 
     /* === TODO プレースホルダー === */
+    .lane-name .lane-id { display: block; font-size: 0.6875rem; font-weight: 500; opacity: 0.75; }
+    .note .untr {
+      display: block; width: fit-content; margin: 4px auto 0 auto; padding: 0 6px;
+      font-size: 0.6875rem; font-weight: 700; line-height: 1.5; border-radius: 999px;
+      background: rgba(255, 255, 255, 0.75); color: #B71C1C; border: 1px dashed #E57373;
+    }
+    .label-gaps {
+      margin: 12px 0; padding: 10px 14px; border-radius: 6px; font-size: 0.875rem;
+      background: #FFF8E1; color: #5D4037; border-left: 4px solid #FFB300; overflow-wrap: anywhere;
+    }
+    .empty-model {
+      margin: 16px 0; padding: 18px 20px; border-radius: 10px; text-align: center;
+      background: #F1F8E9; color: #33691E; border: 2px dashed #AED581;
+    }
+    .empty-model p { margin: 4px 0; }
+    .empty-model .empty-model-title { font-size: 1.125rem; font-weight: 700; }
+    .ai-badge {
+      display: inline-block; margin-left: 8px; padding: 1px 10px; vertical-align: middle;
+      font-size: 0.75rem; font-weight: 700; border-radius: 999px;
+      background: #FFEBEE; color: #B71C1C; border: 1px solid #EF9A9A;
+    }
+    .ai-badge.is-default { background: #ECEFF1; color: #455A64; border-color: #B0BEC5; }
     .todo-placeholder {
       padding: 16px; background: #F5F5F5;
       border: 2px dashed #B0BEC5; border-radius: 6px;

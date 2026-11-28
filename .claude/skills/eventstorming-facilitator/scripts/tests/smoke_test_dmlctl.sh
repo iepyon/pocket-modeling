@@ -243,6 +243,13 @@ else
   ng "test_dml_to_quint failed"
 fi
 
+echo "== session findings (2026-11-28) unit tests =="
+if python3 "$REPO_ROOT/.claude/skills/eventstorming-facilitator/scripts/tests/test_session_findings.py" >/dev/null 2>&1; then
+  ok "test_session_findings passes"
+else
+  ng "test_session_findings failed"
+fi
+
 echo ""
 echo "==================="
 echo " PASS: $PASS  FAIL: $FAIL"

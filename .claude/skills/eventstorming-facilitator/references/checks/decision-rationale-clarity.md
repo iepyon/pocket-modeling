@@ -26,6 +26,16 @@ python3 scripts/dmlctl.py view <session>.dml.yaml --view=decisions
    （「不適切」だけでなく、何が起きるか）
 3. **affects[]** に影響範囲が記載されているか（AGG / BC / シナリオへの波及）
 4. **chosen と options[].adopted: true** が整合しているか
+5. **同じ文言（または言い回しだけ違う同じ理由）の why_not が、decisions 全体で 3 件以上** 出ていないか。
+   出ていたら、該当する decision すべてに `vague` と issue「why_not の定型化（N 件で同じ理由）」を付ける。
+   AI が補った理由は型にはまりやすい（例:「マスターの手が止まる」が 7 件）。各案の固有の不利点に書き換えるか、
+   理由が分からないなら why_not を空にするよう suggestion する
+6. **why_not が空の不採用案は指摘しない**（回答者が理由を言わなかった案は空でよい。playbook §11）。
+   「理由は未確認」「回答者は選ばなかった」のような定型の埋め草は `vague` とし、空にするよう suggestion する
+7. **note に、決着済みの論点への「確認中」が残っていないか**（例: 「Q3 で確認中」とあるが、Q3 は closed で
+   別 decision が決着させている）。残っていれば `field: note` で指摘する
+8. **`decided_by: ai-default` / `ai-persona`** の decision は、本人未確認であることを前提に読む。
+   why に「本人の選択」と読める書き方があれば `vague` で指摘する
 
 入力 (YAML):
 {{decisions_yaml}}
@@ -36,7 +46,7 @@ python3 scripts/dmlctl.py view <session>.dml.yaml --view=decisions
     "id": "<D{n}>",
     "verdict": "clear" | "vague" | "incomplete",
     "issues": [
-      { "field": "why"|"why_not"|"affects", "option": "<option.name>", "issue": "<指摘>", "suggestion": "<改善案>" }
+      { "field": "why"|"why_not"|"affects"|"note", "option": "<option.name>", "issue": "<指摘>", "suggestion": "<改善案>" }
     ]
   }
 ]
@@ -70,7 +80,7 @@ python3 scripts/dmlctl.py view <session>.dml.yaml --view=decisions
 ## ストローマン論法を避ける
 
 `why_not` で同じ文言を複数 decision に使い回している場合、選択肢の固有性を語れていない
-可能性が高い。例: 「主催者の運営負荷を増やす（本サービスの目的に逆行）」が D2 と D4 の
+可能性が高い（観点 5 で機械的に数える）。例: 「主催者の運営負荷を増やす（本サービスの目的に逆行）」が D2 と D4 の
 別オプションで重複していたら、各オプションの **固有の不利点**（公平性論争・選定基準の
 説明責任・例外対応コスト等）に書き換える。
 

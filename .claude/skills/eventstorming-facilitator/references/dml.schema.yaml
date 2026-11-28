@@ -445,7 +445,7 @@ $defs:
       label: { type: string }                   # 日本語表示ラベル（任意。HTML レンダリング時に「label (name)」形式で表示）
       adopted: { type: boolean }                # true なら採用（chosen と整合）
       why: { type: string }                     # 採用理由（adopted: true のとき推奨）
-      why_not: { type: string }                 # 不採用理由（adopted: false/未指定のとき推奨）
+      why_not: { type: string }                 # 不採用理由（adopted: false/未指定のとき推奨。理由が分からなければ省略してよい）
       note: { type: string }
   # ---------- 集約状態の条件（invariants[] の部品） ----------
   # 「集約 agg が in のいずれかの状態にある」。モデル検査では各集約を 1 インスタンスと見なす。
@@ -504,6 +504,9 @@ $defs:
       affects:                                  # 影響する DML 要素名（任意）
         type: array
         items: { type: string }
+      decided_by:                               # 誰が選んだか（任意・省略時は user 扱い）
+        type: string                            #   user=本人 / ai-default=「おまかせ」で AI /
+        enum: [user, ai-default, ai-persona]    #   ai-persona=自動実行で AI が顧客像に沿って代わりに選んだ（本人未確認）
       note: { type: string }
 
   # ---------- Session（v5・セッションメタ：旧 .md ヘッダー相当） ----------

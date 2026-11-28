@@ -72,6 +72,15 @@ python3 .claude/skills/eventstorming-facilitator/scripts/eventstorming_build.py 
 
 未完成セクションは DML 側で対応するトップレベルフィールドを未記述にすると、HTML 側で `.todo-placeholder`（または見出しごと非表示、`decisions[]` 等）として縮退表示される。
 
+進捗バーの直後には、状況に応じて 2 つの帯が出る（`build_body_html`）:
+
+| 帯 | 条件 | 関数・クラス |
+|---|---|---|
+| 空のモデルの案内 | `narratives` / `scenarios` / `contexts` / `aggregates` / `policies` / `decisions` がすべて空（`dmlctl init` 直後） | `render_empty_model()` → `.empty-model`（「質問に答えると、ここにモデルが育ちます」） |
+| 日本語ラベル未登録 | 構造チェック `language_coverage` の指摘（ACTOR の warn を含む）が 1 件以上 | `render_label_gaps()` → `.label-gaps`（件数と先頭 8 件の識別子） |
+
+ラベルの無い識別子は、フロー図の付箋（`_note()` が立てる `Note.untranslated`）に `.untr`「訳未登録」の印が付く。レーン見出しは、BC に `label_ja` があれば「日本語名＋`.lane-id` の英語 BC 名」で出す（`render_flows(..., bc_labels=)`。BC カードの `label_ja` から作る）。
+
 ---
 
 ## 5. Event Flow グリッド（Big Picture 形式）
@@ -283,7 +292,7 @@ BULK POLICY 由来の Note に付くクラス。
 
 ```
 .decision-card
-  h3              ← "<id>. <topic>"
+  h3              ← "<id>. <topic>"。decided_by が ai-persona なら .ai-badge「AI が選択（要確認）」、ai-default なら .ai-badge.is-default「AI が選択（おまかせ）」を後ろに付ける
   .dep            ← "採用: <chosen>"、任意で "影響: <affects[]>"（`contexts[].lang` 由来の glossary_index で日本語化）
   .decision-options
     .opt.adopted    ← 採用された option（緑系・✓ マーカー）

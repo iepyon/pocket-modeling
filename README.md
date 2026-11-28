@@ -77,19 +77,21 @@ DimML は別パイプライン（`validate_dimml.py` → `dimml_build.py`）で�
     │   ├── eventstorming_build.py  # DML → HTML レンダラ（全 9 セクション）
     │   ├── validate_dml.py         # Schema 構文検証
     │   ├── dmlctl.py               # 観点別スライス I/O・構造チェック
-    │   └── dml_filters/            # views（16）/ checks（18）の実装
+    │   └── dml_filters/            # views（17）/ checks（32）の実装
     ├── templates/event-flow.html
     └── examples/sample.dml.yaml
 ```
 
 ## セットアップ
 
-1. リポジトリを clone し、ルートで [Claude Code](https://claude.com/claude-code) を起動する（`.claude/settings.json` のフックとスキルが自動で有効になる。スクリプトはすべてリポジトリルートからの相対パスで動く）。
+1. リポジトリを clone し、ルートで [Claude Code](https://claude.com/claude-code) を起動する（`.claude/settings.json` のフックとスキルが自動で有効になる。スクリプトはリポジトリルートからの相対パスで動く。フックは `$CLAUDE_PROJECT_DIR` 基準なので、作業フォルダがサブフォルダに移っても効く）。
 2. Python 3 と依存ライブラリを入れる:
 
 ```sh
-pip install pyyaml jsonschema ruamel.yaml
+pip install -r .claude/skills/eventstorming-facilitator/requirements.txt
 ```
+
+Claude Code のセッション開始時には SessionStart フック（`.claude/hooks/session-start.sh`）が同じものを入れる（入っていれば何もしない）。クラウドの新しいセッションでも、最初の `dmlctl init` が依存不足で落ちない。
 
 - `pyyaml` / `jsonschema` — 検証・ビルド用
 - `ruamel.yaml` — `dmlctl` の構造化編集（set/add/remove、コメント・引用形式を維持）用
@@ -107,6 +109,24 @@ python3 .claude/skills/eventstorming-facilitator/scripts/dmlctl.py build --all
 python3 .claude/skills/dimensional-modeling-facilitator/scripts/dimml_build.py --all   # docs/dimensional/ が空なら対象なし
 open dist/eventstorming/*.html   # または任意のブラウザで開く
 ```
+
+5. （任意・クラウドのセッション向け）セッションの成果を自動でコミットさせる。クラウドのコンテナは破棄されると未コミットのファイルが消える。スキルは既定ではユーザーの指示なしに git を操作しないが、セッション冒頭に「区切りごとにコミットしてよいか」を 1 回だけ聞く。権限の確認で毎回止まらないようにするには、`.claude/settings.local.json`（自分だけ）か `.claude/settings.json`（チーム全体）に、対象を絞った許可を書く:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add docs/eventstorming/*)",
+      "Bash(git add docs/skill-improvements/*)",
+      "Bash(git add docs/dimensional/*)",
+      "Bash(git commit -m *)",
+      "Bash(git push -u origin *)"
+    ]
+  }
+}
+```
+
+`git add -A` や `git push --force` は含めない（セッションの DML と改善メモ以外を巻き込まないため）。
 
 ### 使い始める
 

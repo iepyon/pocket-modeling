@@ -52,6 +52,10 @@ DML ファイルへの **唯一の I/O 経路** になる。
     dmlctl action <file> --id=<id> [--not-done]
         actions[].done を id 指定でトグルする糖衣（既定は done: true）。
 
+    dmlctl derive-agg-events <file> [--agg=<Name>] [--dry-run]
+        scenarios[].agg / policies[].agg が指す集約の events[] に、シナリオ・ポリシーの
+        evt（brs[].evt を含む）のうち未宣言のものを {name} だけで足す（params は後で埋める）。
+
     dmlctl check <file> (--check=<name> | --all)
         構造チェック観点を実行し、違反を JSON で stdout に出力する。
 
@@ -103,6 +107,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from dml_filters.views import VIEWS  # noqa: E402
 from dml_filters.checks import CHECKS, finding_to_dict  # noqa: E402
+from dml_filters.shared import PHASES  # noqa: E402
 from dml_filters.refs import collect_refs, apply_rename  # noqa: E402
 from dml_filters.hints import resolve_hint  # noqa: E402
 
@@ -245,9 +250,26 @@ def _resolve_list(data, path: str) -> list:
     return target
 
 
-def _parse_value(text: str):
-    """`--value` に渡された YAML リテラルを Python 値に変換する。"""
-    return yaml.safe_load(text)
+def _parse_value(text: str, prose_hint: bool = False):
+    """YAML リテラル（--value / --item / --where の値など）を Python 値に変換する。
+
+    YAML として読めないときは、スタックトレースではなく位置と原因を示して終了する。
+    `prose_hint=True`（散文を受けうる `--value`）のときは、`--value-file`（生テキスト扱い）も案内する。"""
+    try:
+        return yaml.safe_load(text)
+    except yaml.YAMLError as e:
+        head = text.strip().splitlines()[0][:40] if text.strip() else ""
+        mark = getattr(e, "problem_mark", None)
+        where = f"（{mark.line + 1} 行 {mark.column + 1} 文字目）" if mark else ""
+        problem = getattr(e, "problem", None) or str(e).splitlines()[0]
+        msg = f"❌ 値を YAML として読めません{where}: {problem}\n   値の先頭: {head!r}"
+        if prose_hint:
+            msg += (
+                "\n   散文（先頭が `**` `- ` `*` `&` `!` `|` `>` の文、` : ` や `#` を含む長文）は YAML として誤読されます。"
+                "\n   → `--value-file=<path>` を使ってください（中身を生テキストとして扱います）。"
+                "\n   → 短い値なら全体をクォートで囲んでください（例: --value='\"**境界の理由**: …\"'）。"
+            )
+        raise SystemExit(msg) from None
 
 
 def _deep_merge(dst, patch: dict) -> None:
@@ -287,7 +309,7 @@ def _read_value_or_file(args, value_attr: str, file_attr: str):
     if file_path is not None:
         text = Path(file_path).read_text(encoding="utf-8")
         return text
-    return _parse_value(value)
+    return _parse_value(value, prose_hint=True)
 
 
 def _parse_where(where: str) -> tuple[str, object]:
@@ -340,7 +362,7 @@ def _save_and_postprocess(
         yml.dump(data, f)
     if no_postprocess:
         return 0
-    _run_postprocess(path)
+    _run_postprocess(path, data)
     return 0
 
 
@@ -379,8 +401,11 @@ def _dry_run_validate(yml, data, path: Path) -> int:
         tmp.unlink(missing_ok=True)
 
 
-def _run_postprocess(path: Path) -> None:
-    """build + validate を順に実行する。失敗は stderr に出すが exit code は引き継がない。"""
+def _run_postprocess(path: Path, data=None) -> None:
+    """build + validate を順に実行し、書き込み後の警告チェックを出す。
+
+    失敗は stderr に出すが exit code は引き継がない。`data` は書き込んだ内容（メモリ上の
+    モデル）。警告チェックはこれを使い、ファイルを読み直さない。"""
     try:
         subprocess.run(["python3", str(BUILD_SCRIPT), str(path)], check=False)
     except FileNotFoundError:
@@ -401,6 +426,28 @@ def _run_postprocess(path: Path) -> None:
             )
     except FileNotFoundError:
         print(f"⚠ validate スクリプトが見つかりません: {VALIDATE_SCRIPT}", file=sys.stderr)
+    if isinstance(data, dict):
+        _warn_after_write(data)
+
+
+# 書き込みのたびに件数だけ知らせる構造チェック（終了コードには影響しない）。
+# schema 検証だけでは `check --all` まで表に出ず、HTML が英語の識別子のまま出る原因になるもの。
+_POST_WRITE_CHECKS = {
+    "undeclared_ctx": "contexts[] に宣言されていない ctx",
+    "language_coverage": "日本語ラベル未登録（contexts[].lang）— HTML では英語の識別子のまま表示されます",
+}
+
+
+def _warn_after_write(model: dict, limit: int = 5) -> None:
+    for name, title in _POST_WRITE_CHECKS.items():
+        findings = CHECKS[name](model)
+        if not findings:
+            continue
+        print(f"⚠ {title}: {len(findings)} 件", file=sys.stderr)
+        for f in findings[:limit]:
+            print(f"   - {f.message}", file=sys.stderr)
+        if len(findings) > limit:
+            print(f"   …ほか {len(findings) - limit} 件（dmlctl check <file> --check={name}）", file=sys.stderr)
 
 
 # ============================================================
@@ -495,7 +542,7 @@ def cmd_init(args) -> int:
 
     print(f"✅ {path} を作成しました（session id={args.session_id}）")
     if not args.no_postprocess:
-        _run_postprocess(path)
+        _run_postprocess(path, data)
     return 0
 
 
@@ -590,7 +637,7 @@ def cmd_add(args) -> int:
         return 2
     if args.item_file is not None:
         text = Path(args.item_file).read_text(encoding="utf-8")
-        item = yaml.safe_load(text)
+        item = _parse_value(text)
     else:
         item = _parse_value(args.item)
     target.append(item)
@@ -762,15 +809,12 @@ def cmd_rename(args) -> int:
 
 
 # schema が読めない場合のフォールバック（真実源は dml.schema.yaml の session.phase enum）
-_PHASE_ENUM_FALLBACK = ["1", "2", "3", "4", "4.5", "4.6", "5", "6", "7"]
-
-
 def _phase_enum() -> list[str]:
     try:
         enum = _load_schema()["$defs"]["session"]["properties"]["phase"]["enum"]
         return [str(v) for v in enum]
     except Exception:
-        return _PHASE_ENUM_FALLBACK
+        return list(PHASES)
 
 
 def cmd_advance(args) -> int:
@@ -808,6 +852,55 @@ def cmd_advance(args) -> int:
     rc = _save(path, yml, data, args)
     print(f"✅ session.phase: {current or '(未設定)'} → {target}", file=sys.stderr)
     return rc
+
+
+def cmd_derive_agg_events(args) -> int:
+    """集約に紐づくシナリオ／ポリシーの evt から、aggregates[].events[] の不足分を足す。
+
+    対象は `scenarios[].agg == <name>` のシナリオの evt と brs[].evt、および
+    `policies[].agg == <name>` のポリシーの evt（出現順・重複なし）。既存の events[] は
+    触らず、無いものだけ `{name: <Evt>}` で末尾に足す（params はフェーズ 5 で埋める）。"""
+    from dml_filters.shared import scenario_evts
+
+    yml, path, data = _load_doc(args.file)
+    if not isinstance(data, dict):
+        print("❌ DML が空です", file=sys.stderr)
+        return 2
+    targets = [
+        a for a in (data.get("aggregates") or [])
+        if isinstance(a, dict) and (args.agg is None or a.get("name") == args.agg)
+    ]
+    if args.agg and not targets:
+        print(f"❌ aggregates[] に '{args.agg}' がありません", file=sys.stderr)
+        return 2
+    total = 0
+    for agg in targets:
+        name = agg.get("name")
+        wanted: list[str] = []
+        for sc in data.get("scenarios") or []:
+            if isinstance(sc, dict) and sc.get("agg") == name:
+                for ev in scenario_evts(sc):
+                    if ev not in wanted:
+                        wanted.append(ev)
+        for pol in data.get("policies") or []:
+            if isinstance(pol, dict) and pol.get("agg") == name and pol.get("evt"):
+                if pol["evt"] not in wanted:
+                    wanted.append(pol["evt"])
+        existing = {
+            e.get("name") for e in (agg.get("events") or []) if isinstance(e, dict)
+        }
+        missing = [ev for ev in wanted if ev not in existing]
+        if not missing:
+            continue
+        if agg.get("events") is None:
+            agg["events"] = []
+        agg["events"].extend({"name": ev} for ev in missing)
+        total += len(missing)
+        print(f"✅ {name}.events に {len(missing)} 件追加: {', '.join(missing)}", file=sys.stderr)
+    if total == 0:
+        print("✅ 不足する events[] はありません（変更なし）", file=sys.stderr)
+        return 0
+    return _save(path, yml, data, args)
 
 
 def cmd_action(args) -> int:
@@ -1094,6 +1187,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_action.add_argument("--not-done", action="store_true", help="done: false に戻す")
     _add_write_flags(p_action)
     p_action.set_defaults(func=cmd_action)
+
+    p_derive = sub.add_parser(
+        "derive-agg-events",
+        help="シナリオ／ポリシーの evt から aggregates[].events[] の不足分を足す",
+    )
+    p_derive.add_argument("file")
+    p_derive.add_argument("--agg", help="対象の AGG 名（省略時は全集約）")
+    _add_write_flags(p_derive)
+    p_derive.set_defaults(func=cmd_derive_agg_events)
 
     p_hint = sub.add_parser("hint", help="パスの期待型を schema から提示する（書き込み前の型確認）")
     p_hint.add_argument("--path", required=True, help="例: queries.users / scenarios[].brs[].pol / session.phase")

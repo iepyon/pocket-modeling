@@ -27,6 +27,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from dml_filters.checks import language_coverage
 from dml_filters.flow_walk import index_policies_by_trg, pick_active_branch
 
 try:
@@ -77,6 +78,7 @@ class Note:
     is_async: bool = False
     is_fanout: bool = False  # *> 後段。スタック描画 + ×N バッジ
     is_pivotal: bool = False  # scenarios[].pivotal 由来。節目イベントの強調描画
+    untranslated: bool = False  # contexts[].lang に日本語ラベルが無く、英語の識別子のまま出ている
 
 
 @dataclass
@@ -240,6 +242,16 @@ def localize(identifier: str, glossary_index: dict[str, str]) -> str:
     return glossary_index.get(identifier, identifier)
 
 
+def _note(kind: str, identifier: str, glossary_index: dict[str, str], **kw) -> "Note":
+    """識別子から付箋を作る。日本語ラベルが無ければ英語のまま出し、`untranslated` を立てる。"""
+    return Note(
+        kind=kind,
+        label=localize(identifier, glossary_index),
+        untranslated=bool(identifier) and identifier not in glossary_index,
+        **kw,
+    )
+
+
 def _collect_pivotal_evts(model: dict) -> set[str]:
     """scenarios[].pivotal: true の scenario が発火する EVT 名（evt / brs[].evt）を集める。
 
@@ -278,17 +290,17 @@ def _scenario_steps_to_notes(
     pivotal_evts = pivotal_evts or set()
 
     def _evt_note(ev: str) -> Note:
-        return Note(kind="event", label=localize(ev, gloss), is_pivotal=ev in pivotal_evts)
+        return _note("event", ev, gloss, is_pivotal=ev in pivotal_evts)
 
     notes: list[Note] = []
     actor = sc.get("actor") or ""
     if actor and not (SKIP_SYSTEM_ACTOR and actor == "System"):
-        notes.append(Note(kind="actor", label=localize(actor, gloss)))
+        notes.append(_note("actor", actor, gloss))
     for q in sc.get("qry") or []:
-        notes.append(Note(kind="readmodel", label=localize(q, gloss)))
+        notes.append(_note("readmodel", q, gloss))
     cmd = sc.get("cmd")
     if cmd:
-        notes.append(Note(kind="command", label=localize(cmd, gloss)))
+        notes.append(_note("command", cmd, gloss))
     if active_br is not None:
         # フロー別描画: アクティブな brs.evt のみ
         ev = active_br.get("evt")
@@ -325,13 +337,14 @@ def _policy_steps_to_notes(
     pivotal_evts = pivotal_evts or set()
     notes: list[Note] = []
     bulk = bool(pol.get("bulk"))
-    notes.append(Note(kind="policy", label=localize(pol.get("name", ""), gloss)))
+    pol_name = pol.get("name", "")
+    notes.append(_note("policy", pol_name, gloss))
     qry = pol.get("qry")
     if qry:
-        notes.append(Note(kind="readmodel", label=localize(qry, gloss)))
+        notes.append(_note("readmodel", qry, gloss))
     if pol.get("evt"):
         ev = pol["evt"]
-        n = Note(kind="event", label=localize(ev, gloss), is_pivotal=ev in pivotal_evts)
+        n = _note("event", ev, gloss, is_pivotal=ev in pivotal_evts)
         if bulk:
             n.is_fanout = True
         notes.append(n)
@@ -689,7 +702,7 @@ def render_progress(status: str, phase: str | None = None) -> str:
 def render_narratives(narratives: list[dict]) -> str:
     """`narratives[]` をストーリーとして描画（kind:happy 先頭・黄背景、kind:alt 後続・白カード）。"""
     if not narratives:
-        return '<div class="todo-placeholder">TODO: フェーズ2完了後に追記</div>'
+        return '<div class="todo-placeholder">まだストーリーはありません。質問に答えると、ここに業務の流れの文章が育ちます。</div>'
     # happy を先頭、alt を後続。kind 不在は alt 扱いで末尾。
     ordered = sorted(
         narratives,
@@ -719,11 +732,14 @@ def render_narratives(narratives: list[dict]) -> str:
     return "\n  ".join(parts)
 
 
-def render_flows(flows: list[Flow], provisional: bool = False) -> str:
+def render_flows(
+    flows: list[Flow], provisional: bool = False, bc_labels: dict[str, str] | None = None
+) -> str:
     """§2 Event Walkthrough を描画する。
 
     `provisional=True` は `build_provisional_flow()` 由来の暫定フロー（DML 記載順）で、
     確定フローと見間違えないよう図の上に警告バッジを出す。
+    `bc_labels` があれば、レーン見出しを「日本語名＋英語の BC 名」で出す。
     """
     if not flows:
         return (
@@ -766,11 +782,11 @@ def render_flows(flows: list[Flow], provisional: bool = False) -> str:
             "</div>"
         )
     for flow in flows:
-        out_parts.append(render_flow(flow))
+        out_parts.append(render_flow(flow, bc_labels))
     return "\n  ".join(out_parts)
 
 
-def render_flow(flow: Flow) -> str:
+def render_flow(flow: Flow, bc_labels: dict[str, str] | None = None) -> str:
     """1 つの Flow を Big Picture グリッド HTML に変換。
 
     同じ Flow を 2 ビュー分レンダリングして DOM に両方残す:
@@ -784,9 +800,9 @@ def render_flow(flow: Flow) -> str:
     full_body = _render_flow_body(
         unique_bcs, bc_to_row, bc_to_color,
         _flow_notes_full(flow, bc_to_row),
-        "flow-view-full",
+        "flow-view-full", bc_labels,
     )
-    events_body = _render_flow_body_events(flow)
+    events_body = _render_flow_body_events(flow, bc_labels)
     return (
         f'<div class="flow">\n'
         f'    <div class="flow-title">{esc(flow.title)}</div>\n'
@@ -825,9 +841,13 @@ def _render_note(note: Note, row: int, col: int) -> str:
         note_cls += " fanout"
     if note.is_pivotal:
         note_cls += " pivotal"
+    untr_html = (
+        '<span class="untr" title="日本語ラベルが未登録です（contexts[].lang）">訳未登録</span>'
+        if note.untranslated else ""
+    )
     return (
         f'<div class="{note_cls}" style="grid-row: {row}; grid-column: {col};">'
-        f'<span class="kind">{kind_label}</span>{label_html}</div>'
+        f'<span class="kind">{kind_label}</span>{label_html}{untr_html}</div>'
     )
 
 
@@ -913,7 +933,7 @@ def _events_only_steps(flow: Flow) -> list[tuple[str, Note, bool, bool]]:
     return steps
 
 
-def _render_flow_body_events(flow: Flow) -> str:
+def _render_flow_body_events(flow: Flow, bc_labels: dict[str, str] | None = None) -> str:
     """EVT のみビュー（`.flow-view-events`）の `.flow-body` を組み立てる。
 
     連続 EVT 間の繋ぎは、間に非同期境界を挟むかで矢印を切替える:
@@ -963,8 +983,15 @@ def _render_flow_body_events(flow: Flow) -> str:
         f'<div class="end-spacer" style="grid-row: 1; grid-column: {col};"></div>'
     )
     return _render_flow_body(
-        unique_bcs, bc_to_row, bc_to_color, note_elements, "flow-view-events"
+        unique_bcs, bc_to_row, bc_to_color, note_elements, "flow-view-events", bc_labels
     )
+
+
+def _lane_label_html(bc: str, label_ja: str | None) -> str:
+    """レーン見出し。BC に日本語名があれば「日本語名＋英語の BC 名」で出す。"""
+    if not label_ja:
+        return esc(bc)
+    return f'{esc(label_ja)}<span class="lane-id">{esc(bc)}</span>'
 
 
 def _render_flow_body(
@@ -973,12 +1000,13 @@ def _render_flow_body(
     bc_to_color: dict[str, str],
     note_elements: list[str],
     view_cls: str,
+    bc_labels: dict[str, str] | None = None,
 ) -> str:
     """レーンヘッダ + 横スクロールグリッドの `.flow-body` を組み立てる。"""
     # === 左カラム: レーンヘッダ(横スクロール対象外) ===
     lane_header_items = [
         f'<div class="lane-name {bc_to_color[bc]}" style="grid-row: {bc_to_row[bc]};">'
-        f"{esc(bc)}</div>"
+        f"{_lane_label_html(bc, (bc_labels or {}).get(bc))}</div>"
         for bc in unique_bcs
     ]
     lane_header_html = "\n        ".join(lane_header_items)
@@ -1603,9 +1631,15 @@ def render_decisions(model: dict, glossary_index: dict[str, str]) -> str:
         note_html = (
             f'<div class="decision-note">{esc(note)}</div>' if note else ""
         )
+        by = d.get("decided_by")
+        by_html = ""
+        if by == "ai-persona":
+            by_html = ' <span class="ai-badge" title="自動実行で AI が顧客像に沿って選びました。本人の確認が必要です">AI が選択（要確認）</span>'
+        elif by == "ai-default":
+            by_html = ' <span class="ai-badge is-default" title="「おまかせ」で AI が選びました">AI が選択（おまかせ）</span>'
         out.append(
             f'<div class="decision-card">\n'
-            f'    <h3>{did}. {topic}</h3>\n'
+            f'    <h3>{did}. {topic}{by_html}</h3>\n'
             f'    <div class="dep"><strong>採用:</strong> '
             f'{chosen_html}{affects_html}</div>\n'
             f'    <div class="decision-options">\n      {opts_html}\n    </div>\n'
@@ -1937,6 +1971,45 @@ def render_html(doc: DMLDocument) -> str:
     return html
 
 
+def render_label_gaps(model: dict | None) -> str:
+    """日本語ラベル（contexts[].lang）が未登録の識別子の件数を、ページ上部に 1 行で出す。
+
+    ラベルが無い識別子は図や表で英語のまま表示される。日本語の読み手には表示の仕様に見えて
+    しまうので、モデル側の不備（登録漏れ）であることをページ上で分かるようにする。"""
+    if not isinstance(model, dict):
+        return ""
+    names: list[str] = []
+    for f in language_coverage(model):
+        ident = (f.slice or {}).get("identifier")
+        if ident and ident not in names:
+            names.append(ident)
+    if not names:
+        return ""
+    shown = "、".join(f"<code>{esc(n)}</code>" for n in names[:8])
+    more = f" ほか {len(names) - 8} 件" if len(names) > 8 else ""
+    return (
+        '<div class="label-gaps" role="note">'
+        f'<strong>日本語ラベル未登録: {len(names)} 件</strong> — {shown}{more}。'
+        "図では英語のまま「訳未登録」の印付きで表示しています（contexts[].lang に登録すると日本語になります）"
+        "</div>"
+    )
+
+
+def render_empty_model(model: dict | None) -> str:
+    """モデルがまだ空のとき（init 直後）に、これから何が育つかを示す案内を出す。"""
+    if isinstance(model, dict) and any(
+        model.get(k) for k in ("narratives", "scenarios", "contexts", "aggregates", "policies", "decisions")
+    ):
+        return ""
+    return (
+        '<div class="empty-model">'
+        '<p class="empty-model-title">質問に答えると、ここにモデルが育ちます</p>'
+        "<p>答えるたびに、業務のストーリー、出来事の流れ（だれが何をして、何が起きるか）、"
+        "決めたことの記録が、このページの下に少しずつ書き足されていきます。</p>"
+        "</div>"
+    )
+
+
 def build_body_html(
     doc: DMLDocument, title: str, session: str, goal: str, status: str,
     phase: str | None = None,
@@ -1947,10 +2020,14 @@ def build_body_html(
     # フロー図ラベルや §6 意思決定ログの affects 表示で英語識別子を日本語に置換する。
     glossary_index = build_glossary_index_from_dml(doc.model)
 
+    bc_cards = bc_cards_from_dml(doc.model)
     decisions_html = ""
     if doc.model is not None:
         flows, flows_provisional = select_flows(doc.model, glossary_index)
-        flows_html = render_flows(flows, provisional=flows_provisional)
+        flows_html = render_flows(
+            flows, provisional=flows_provisional,
+            bc_labels={c["slug"]: c["label_ja"] for c in bc_cards if c.get("label_ja")},
+        )
         agg_cards_html = render_agg_cards_from_dml(doc.model, glossary_index)
         decisions_html = render_decisions(doc.model, glossary_index)
     else:
@@ -1963,7 +2040,6 @@ def build_body_html(
             '<div class="todo-placeholder">DML 解析不可 — §10 を参照</div>'
         )
 
-    bc_cards = bc_cards_from_dml(doc.model)
     context_map_html = render_context_map(bc_cards)
     bc_cards_html = render_bc_cards(bc_cards)
     qry_cards_html = render_qry_cards(doc.qrys)
@@ -1989,6 +2065,7 @@ def build_body_html(
   <div class="progress">
     {progress_html}
   </div>
+  {render_empty_model(doc.model)}{render_label_gaps(doc.model)}
 
   <h2>1. ストーリー</h2>
   {narratives_html}
@@ -2041,6 +2118,14 @@ def _validate_dml_warn(dml_text: str, dml_path: Path) -> list[str]:
     for e in errors:
         print(f"⚠ DML schema: {dml_path.name}: {e}", file=sys.stderr)
     return errors
+
+
+def _display_path(path: Path) -> str:
+    """表示用のパス。リポジトリ内ならルートからの相対、外（--out で別の場所を指定）なら絶対パス。"""
+    try:
+        return str(path.resolve().relative_to(PROJECT_ROOT))
+    except ValueError:
+        return str(path)
 
 
 def _session_stem(yaml_path: Path) -> str:
@@ -2139,7 +2224,7 @@ def build_all(in_dir: Path, out_dir: Path, *, artifact: bool = False) -> list[Pa
         try:
             out = build(yaml_path, out_dir, artifact=artifact)
             results.append(out)
-            print(f"✅ {yaml_path.name} → {out.relative_to(PROJECT_ROOT)}")
+            print(f"✅ {yaml_path.name} → {_display_path(out)}")
         except Exception as e:
             print(f"❌ {yaml_path.name}: {e}", file=sys.stderr)
     return results
@@ -2159,7 +2244,7 @@ def watch(in_dir: Path, out_dir: Path, interval: float = 1.0) -> None:
                     mtimes[yaml_path] = mtime
                     try:
                         out = build(yaml_path, out_dir)
-                        print(f"♻️  {yaml_path.name} → {out.relative_to(PROJECT_ROOT)}")
+                        print(f"♻️  {yaml_path.name} → {_display_path(out)}")
                     except Exception as e:
                         print(f"❌ {yaml_path.name}: {e}", file=sys.stderr)
             time.sleep(interval)
@@ -2234,7 +2319,7 @@ def main() -> int:
 
     try:
         out = build(yaml_path, out_dir, artifact=args.artifact)
-        print(f"✅ {yaml_path.name} → {out.relative_to(PROJECT_ROOT)}")
+        print(f"✅ {yaml_path.name} → {_display_path(out)}")
         if args.copy:
             copy_to_clipboard(out)
         return 0

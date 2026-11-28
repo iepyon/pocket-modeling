@@ -10,6 +10,10 @@ from typing import Any
 
 INITIAL_STATE = "NONE"  # transitions[].from に書く「生成前」の擬似状態
 
+# session.phase の並び（schema の enum と同じ順）。schema を読めないときの既定値と、
+# 中身から見たフェーズとの比較（phase_drift）が共有する。
+PHASES = ["1", "2", "3", "4", "4.5", "4.6", "5", "6", "7"]
+
 
 def to_list(v: Any) -> list[str]:
     """単一値 / 配列 / None を文字列リストに正規化する。"""

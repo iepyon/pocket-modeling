@@ -287,6 +287,84 @@ def _example(schema: dict, candidates: list[dict], path: str) -> str:
     return " または ".join(f"set --path={path} --value='{lit}'" for lit in lits)
 
 
+# 型だけでは分からない「何を書くか」と、取り違えやすい値の正しい例。
+# キーは選択子を `[]` に正規化したパスの**末尾一致**（例 `transitions[].via` は
+# `aggregates[].transitions[].via` にも `aggregates[name=X].transitions[].via` にも当たる）。
+# 配列とその要素（`brs` と `brs[]`）は同じ注記を使うので、キーは末尾の `[]` なしで 1 つだけ書く。
+_PATH_NOTES: dict[str, dict[str, str]] = {
+    "transitions[].via": {
+        "meaning": "この遷移を起こすコマンド名（scenarios[].cmd / policies[].cmd の値）。イベント名ではない（イベント名を書くと dangling_cmd になる）",
+        "correct": "via: ConfirmOrder   # ✕ via: OrderConfirmed",
+    },
+    "transitions": {
+        "meaning": "状態遷移の配列。各要素の via はコマンド名",
+        "correct": "add --to='aggregates[name=Order].transitions' --item='{from: PLACED, to: CONFIRMED, via: ConfirmOrder}'",
+    },
+    "events[].params": {
+        "meaning": "イベントのペイロード属性。要素は文字列ではなく {name, type, required, note} の辞書",
+        "correct": "params: [{name: orderId, type: string, required: true}]   # ✕ params: [orderId]",
+    },
+    "events": {
+        "meaning": "この集約が発行するイベントの配列。シナリオの evt から不足分を足すなら dmlctl derive-agg-events",
+        "correct": "add --to='aggregates[name=Order].events' --item='{name: OrderPlaced, params: [{name: orderId, type: string}]}'",
+    },
+    "attrs": {
+        "meaning": "集約の属性。要素は {name, type, required, note} の辞書（文字列の配列ではない）",
+        "correct": "attrs: [{name: orderId, type: string, required: true}]",
+    },
+    "brs": {
+        "meaning": "同じトランザクション内の分岐。cond が成り立てば evt が起きる。next（その分岐の続き）と terminal（その分岐でフローが終わる narratives[].id）はどちらか一方だけ",
+        "correct": "{cond: 在庫あり, evt: StockReserved, next: システムが出荷を手配する}  /  {cond: 在庫なし, evt: StockShortage, terminal: alt-shortage}",
+    },
+    "brs[].terminal": {
+        "meaning": "この分岐が起きたらフローが終わる narratives[].id（next と同時には書けない）",
+        "correct": "terminal: alt-shortage",
+    },
+    "brs[].next": {
+        "meaning": "この分岐の続きのシナリオ名（scenarios[].name・日本語）。terminal と同時には書けない",
+        "correct": "next: システムが出荷を手配する",
+    },
+    "scenarios[].next": {
+        "meaning": "次のシナリオ名（scenarios[].name・日本語）。フローで分かれるなら {<narratives[].id>: <シナリオ名>} の辞書。POLICY が自動で起動する CMD のシナリオへは next でつながない（POLICY が担う）",
+        "correct": "next: 店員が注文を受け付ける   /   next: {happy: 店員が注文を受け付ける, alt-cancel: 客が注文を取り消す}",
+    },
+    "scenarios[].ctx": {
+        "meaning": "所属 BC の名前。contexts[] に宣言されている必要がある（無いと日本語ラベルの置き場がない）。フェーズ 3 は仮の slug でよいが、同じターンに contexts[] にも作る",
+        "correct": "ctx: ordering   （先に add --to=contexts --item='{name: ordering, label_ja: 注文}'）",
+    },
+    "policies[].cmd": {
+        "meaning": "trg のイベントを受けて自動で起動するコマンド。同じ CMD を別シナリオの next から直接呼ばない",
+        "correct": "{name: ReserveRoastOnLowStock, ctx: roasting, trg: StockRunLow, cmd: ScheduleRoast, agg: RoastBatch}",
+    },
+    "decisions[].decided_by": {
+        "meaning": "誰が選んだか。user=本人／ai-default=「おまかせ」で AI／ai-persona=自動実行で AI が顧客像に沿って代わりに選んだ。ai-* は本人未確認",
+        "correct": "decided_by: ai-persona",
+    },
+    "decisions[].options[].why_not": {
+        "meaning": "不採用の理由（業務の言葉で、その案固有の不利点）。理由が分からなければ省略してよい（定型文で埋めない）",
+        "correct": "why_not: 焙煎のたびに全量を量り直すことになり、朝の仕込みに 30 分余計にかかる",
+    },
+    "contexts": {
+        "meaning": "BC の宣言。日本語ラベルは lang（cmds/evts/actors/aggs/pols/states …）に登録する",
+        "correct": "add --to=contexts --item='{name: ordering, label_ja: 注文, lang: {cmds: {PlaceOrder: 注文する}, evts: {OrderPlaced: 注文された}}}'",
+    },
+}
+
+
+def _path_note(segments: list) -> dict[str, str] | None:
+    """`parse_hint_path` のセグメント列に当たる注記（最も長い末尾一致）を返す。"""
+    norm = ""
+    for seg in segments:
+        norm += "[]" if seg is _ITEM else ("." if norm else "") + str(seg)
+    if norm.endswith("[]"):
+        norm = norm[:-2]
+    best = None
+    for key, note in _PATH_NOTES.items():
+        if (norm == key or norm.endswith("." + key)) and (best is None or len(key) > len(best[0])):
+            best = (key, note)
+    return best[1] if best else None
+
+
 def resolve_hint(schema: dict, path: str) -> dict:
     """パスの期待型ヒントを返す。解決不能なら {"error", "valid_keys"} を返す。"""
     segments = parse_hint_path(path)
@@ -312,4 +390,9 @@ def resolve_hint(schema: dict, path: str) -> dict:
         hint = _describe(schema, candidates[0])
     else:
         hint = {"oneOf": [_describe(schema, c) for c in candidates]}
-    return {"path": path, "hint": hint, "example": _example(schema, candidates, path)}
+    out = {"path": path, "hint": hint, "example": _example(schema, candidates, path)}
+    note = _path_note(segments)
+    if note:
+        out["meaning"] = note["meaning"]
+        out["correct_example"] = note["correct"]
+    return out

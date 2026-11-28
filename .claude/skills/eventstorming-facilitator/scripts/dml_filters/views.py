@@ -295,6 +295,33 @@ def flow_causality(model: dict, *, id: str | None = None, **_) -> Any:
     return {"flows": result_flows}
 
 
+def ai_decided(model: dict, **_) -> Any:
+    """本人未確認の決定（decided_by が ai-default / ai-persona）だけを一覧する。
+
+    自動実行や「おまかせ」で AI が選んだ決定を、本人に確認してもらうときの棚卸し用。"""
+    rows = []
+    for d in model.get("decisions") or []:
+        if not isinstance(d, dict):
+            continue
+        by = d.get("decided_by")
+        if by not in ("ai-default", "ai-persona"):
+            continue
+        chosen = d.get("chosen")
+        label = chosen
+        for o in d.get("options") or []:
+            if isinstance(o, dict) and o.get("name") == chosen and o.get("label"):
+                label = f"{o['label']} ({chosen})"
+        rows.append({
+            "id": d.get("id"),
+            "decided_by": by,
+            "topic": d.get("topic"),
+            "chosen": label,
+            "affects": d.get("affects") or [],
+            "note": d.get("note"),
+        })
+    return {"ai_decided": rows, "count": len(rows)}
+
+
 def decisions(model: dict, **_) -> Any:
     """意思決定ログ一覧。"""
     return {"decisions": model.get("decisions") or []}
@@ -414,8 +441,7 @@ def coverage(model: dict, **_) -> Any:
             oname = o.get("name") or "?"
             if o.get("adopted") is True and not o.get("why"):
                 missing.append(f"options[{oname}].why")
-            if o.get("adopted") is not True and not o.get("why_not"):
-                missing.append(f"options[{oname}].why_not")
+            # 不採用案の why_not は「理由が分からなければ省略してよい」（playbook §11）ので残欠に数えない。
         return missing
 
     def _narrative_expected(n: dict) -> list[str]:
@@ -460,6 +486,7 @@ VIEWS: dict[str, Callable[..., Any]] = {
     "agg-detail": agg_detail,
     "flow-causality": flow_causality,
     "decisions": decisions,
+    "ai-decided": ai_decided,
     "queries": queries,
     "scenarios": scenarios,
     "policies": policies,

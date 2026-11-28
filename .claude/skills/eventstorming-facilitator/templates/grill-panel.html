@@ -6,6 +6,7 @@
      - 質問:  db `grill/current`  {questions: [...]} … Claude が ArtifactData で書く（閲覧者は読むだけ）
      - 反映:  db `grill/progress` {reflected: {<qid>: {summary, at}}} … Claude が書く
      - 回答:  db `answers/<qid>--<uid>` … 閲覧者がこのパネルから書く（choices[] ＋ 単一選択時は互換用 choice）
+              「これまでの回答」から選び直すと、同じドキュメントを rev（版）と prev（前の回答）つきで上書きする
      - 通知:  回答保存後、comments.sendToClaude でこのページを見張っている Claude のセッションを起こす
      仕様は SKILL.md「Artifact 上のグリル」を参照。DML 由来の内容は一切含まない（固定スニペット）。
      ============================================================ -->
@@ -88,7 +89,10 @@
   .gr-log li { min-width: 0; overflow-wrap: anywhere; }
   .gr-log .gr-log-q { color: var(--gr-sub); }
   .gr-log .gr-log-a { font-weight: 600; white-space: pre-wrap; }
-  .gr-log .gr-log-who { color: var(--gr-sub); font-size: 0.8125rem; }
+  .gr-log .gr-log-who { color: var(--gr-sub); font-size: 0.8125rem; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+  .gr-log .gr-link { font-size: 0.8125rem; color: var(--gr-pick-line); }
+  .gr-tag { font-size: 0.75rem; font-weight: 700; padding: 0 8px; border-radius: 999px; background: #ECEFF1; color: var(--gr-sub); }
+  .gr-redo-note { margin: 0; padding: 8px 12px; border-left: 4px solid var(--gr-pick-line); background: var(--gr-pick); font-size: 0.875rem; }
   .gr-count { margin-left: auto; font-size: 0.8125rem; opacity: 0.85; font-variant-numeric: tabular-nums; }
   .gr-strip {
     display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px;
@@ -124,6 +128,9 @@
   .gm-list .gm-mark { flex: none; font-weight: 700; color: #1B5E20; }
   .gm-list li.is-wait { color: #546E7A; }
   .gm-list li.is-wait { align-items: center; }
+  .gm-list .gm-age { color: #78909C; font-size: 0.8125rem; white-space: nowrap; }
+  .gm-late { margin: 0; padding: 8px 12px; border-radius: 6px; background: #FFF8E1; color: #5D4037; font-size: 0.875rem; }
+  .gm-late .gr-link { color: #5D4037; }
 </style>
 
 <section class="gr" id="grill">
@@ -201,9 +208,41 @@
   }
   function current() {
     var qs = questions();
-    for (var i = 0; i < qs.length; i++) if (S.redo && qs[i].qid === S.redo) return qs[i];
+    if (S.redo) {
+      // やり直し・選び直し中の質問。まだ答えていない質問のやり直し（直前の 1 問）は列から引く
+      var a = mine(S.redo);
+      if (a) return reselectQuestion(a);
+      for (var i = 0; i < qs.length; i++) if (qs[i].qid === S.redo) return qs[i];
+    }
     for (var j = 0; j < qs.length; j++) if (!mine(qs[j].qid)) return qs[j];
     return null;
+  }
+  // 選び直し用の質問を組み立てる。列（grill/current）に残っていればその最新版（誤字を直した選択肢）を、
+  // 外れていれば回答に残した質問文と選択肢から再現する。選択肢が復元できなければ自由記述だけで答える
+  function reselectQuestion(a) {
+    var qs = questions();
+    for (var i = 0; i < qs.length; i++) if (qs[i].qid === a.qid) return qs[i];
+    var labels = Array.isArray(a.options) ? a.options.filter(function (x) { return str(x); }) : [];
+    return {
+      qid: a.qid, text: str(a.question) || '（質問文が残っていません）', phase: str(a.phase),
+      options: labels.map(function (l) { return { label: l }; }), multi: a.multi === true,
+      reselect: true
+    };
+  }
+  function startReselect(a) {
+    S.redo = a.qid; S.formErr = '';
+    render();
+    try { root.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) {}
+  }
+  function cancelReselect() { S.redo = ''; S.formErr = ''; render(); }
+  function atOf(v) { var t = Date.parse(str(v)); return isNaN(t) ? 0 : t; }
+  // 反映待ちか: qid が reflected に無い、または回答が反映より新しい（選び直された回答）
+  function isPending(a) {
+    if (!str(a.qid)) return false;
+    var r = S.reflected[a.qid];
+    if (!r) return true;
+    var aAt = atOf(a.at), rAt = atOf(r.at);
+    return !!(aAt && rAt && aAt > rAt);
   }
   function othersFor(qid) {
     return S.answers.filter(function (a) { return a.qid === qid && a.by !== S.uid; });
@@ -228,7 +267,7 @@
     return S.names[id] || 'ほかの参加者';
   }
   function pending() {
-    return S.answers.filter(function (a) { return str(a.qid) && !S.reflected[a.qid]; });
+    return S.answers.filter(isPending);
   }
 
   // ---------- 質問エリア ----------
@@ -244,7 +283,7 @@
     var v = view();
     var q = v === 'form' ? current() : null;
     var sig = q ? JSON.stringify([q.qid, q.text, q.why, q.hint, q.phase, q.options, q.multi === true]) : str(S.board && S.board.note);
-    var key = [v, sig, S.canWrite, S.stale].join('|');
+    var key = [v, sig, S.canWrite, S.stale, S.redo].join('|');
     if (key !== S.viewKey) {
       S.viewKey = key;
       body.textContent = '';
@@ -290,7 +329,14 @@
       body.appendChild(el('div')).id = 'grill-others';
       return;
     }
-    var prev = mine(q.qid);   // やり直しのときだけ存在する
+    var prev = mine(q.qid);   // やり直し・選び直しのときだけ存在する
+    if (prev && S.redo === q.qid) {
+      body.appendChild(el('p', 'gr-redo-note', '選び直しています。前の回答：' + answerLine(prev) +
+        (S.reflected[q.qid] ? '（モデルに反映済み。送ると、Claude が反映をやり直します）' : '')));
+      if (q.reselect && !(Array.isArray(q.options) && q.options.length)) {
+        body.appendChild(el('p', 'gr-msg', 'この質問の選択肢は残っていないので、自分の言葉で答えてください。'));
+      }
+    }
     var opts = Array.isArray(q.options) ? q.options : [];
     var multi = q.multi === true;
     S.sel = choicesOf(prev);   // 選択中ラベルの配列（単一選択なら高々 1 件）
@@ -349,6 +395,12 @@
       submit(q, { choices: [], text: ta.value.trim(), hint: true }, [send, hint]);
     });
     row.appendChild(send); row.appendChild(hint);
+    if (prev && S.redo === q.qid) {
+      var cancel = el('button', 'gr-btn gr-ghost', '選び直しをやめる');
+      cancel.type = 'button'; cancel.id = 'grill-cancel-redo';
+      cancel.addEventListener('click', cancelReselect);
+      row.appendChild(cancel);
+    }
     body.appendChild(row);
     var err = el('p', 'gr-msg gr-err', S.formErr);
     err.id = 'grill-err'; err.hidden = !S.formErr;
@@ -408,7 +460,9 @@
     strip.hidden = !S.last;
     if (!S.last) return;
     strip.className = 'gr-strip' + (failed ? ' is-warn' : '');
-    var msg = '✓ 回答を保存しました：' + S.last.line;
+    var msg = S.last.prevLine
+      ? '✓ 選び直しを保存しました：' + S.last.prevLine + ' → ' + S.last.line + '。モデルへの反映をやり直します。'
+      : '✓ 回答を保存しました：' + S.last.line;
     if (n === 'sending') msg += '　Claude に知らせています…';
     else if (n === 'ok') msg += '　Claude に知らせました。';
     else if (failed) msg = '回答は保存しましたが、' + notifyText(n.code) + '（理由コード: ' + n.code + (n.detail ? ' / ' + n.detail : '') + '）';
@@ -427,16 +481,32 @@
     if (!list.length) return;
     footSum.textContent = 'これまでの回答（' + list.length + ' 件）';
     logEl.textContent = '';
-    list.forEach(function (a) {
+    list.forEach(function (a, i) {
       var li = el('li');
       li.appendChild(el('div', 'gr-log-q', 'Q. ' + (str(a.question) || '（質問文なし）')));
       li.appendChild(el('div', 'gr-log-a', 'A. ' + answerLine(a)));
-      li.appendChild(el('div', 'gr-log-who', nameOf(a.by) + (S.reflected[a.qid] ? '・モデルに反映済み' : '・反映待ち')));
+      var who = el('div', 'gr-log-who');
+      who.appendChild(el('span', '', nameOf(a.by) + (isPending(a) ? '・反映待ち' : '・モデルに反映済み')));
+      var rec = S.reflected[a.qid];
+      var ds = rec && Array.isArray(rec.decisions) ? rec.decisions.filter(function (d) { return str(d); }) : [];
+      if (ds.length) who.appendChild(el('span', 'gr-tag', '元になった決定: ' + ds.join('・')));
+      if (typeof a.rev === 'number' && a.rev > 1) who.appendChild(el('span', 'gr-tag', '選び直し済み（' + a.rev + ' 回目）'));
+      if (S.canWrite && a.by === S.uid && !S.busy) {
+        who.appendChild(link('選び直す', 'grill-reselect-' + i, function () { startReselect(a); }));
+      }
+      li.appendChild(who);
       logEl.appendChild(li);
     });
   }
 
   // ---------- 反映エリア（質問エリアとは別に描く） ----------
+  // 反映待ちがこれを超えたら「Claude が起きていないかも」と案内する。連続回答の通知をまとめる上限も同じ
+  var LATE_MS = 5 * 60 * 1000;
+  function durText(ms) {
+    var m = Math.floor(ms / 60000);
+    return m < 60 ? m + ' 分' : Math.floor(m / 60) + ' 時間';
+  }
+  function ageText(ms) { return ms < 60000 ? 'たったいま届いた' : durText(ms) + '前に届いた'; }
   function drawModel() {
     if (!S.boardLoaded) { modelBox.hidden = true; return; }
     var wait = pending().filter(function (a) { return !a.hint; });
@@ -458,13 +528,29 @@
       modelState.textContent = 'すべて反映済み';
     }
     modelList.textContent = '';
+    var oldLate = modelBox.querySelector('.gm-late');
+    if (oldLate) oldLate.remove();
+    var now = Date.now();
+    var oldest = 0;
+    wait.forEach(function (a) { var t = atOf(a.at); if (t && (!oldest || t < oldest)) oldest = t; });
     wait.slice(0, 3).forEach(function (a) {
       var li = el('li', 'is-wait');
       var s2 = el('span', 'gm-spin'); s2.setAttribute('aria-hidden', 'true');
       li.appendChild(s2);
       li.appendChild(el('span', '', '「' + answerLine(a) + '」を下のモデルに反映しています'));
+      var t = atOf(a.at);
+      if (t) li.appendChild(el('span', 'gm-age', ageText(now - t)));
       modelList.appendChild(li);
     });
+    if (oldest && now - oldest > LATE_MS) {
+      var late = el('p', 'gm-late', '届いてから ' + durText(now - oldest) +
+        'たっても反映が始まっていません。Claude が起きていないかもしれません。進行役の方に「回答した」と伝えてください。');
+      if (S.canWrite && S.notify !== 'sending') {
+        late.appendChild(document.createTextNode(' '));
+        late.appendChild(link('Claude にもう一度知らせる', 'grill-renotify', function () { S.notifiedAt = 0; notifyClaude(); }));
+      }
+      modelBox.appendChild(late);
+    }
     done.slice(0, 3).forEach(function (r) {
       var li = el('li');
       li.appendChild(el('span', 'gm-mark', '✓'));
@@ -478,21 +564,31 @@
     if (S.busy) return;
     S.busy = true; showFormErr('');
     buttons.forEach(function (b) { b.disabled = true; });
+    var before = mine(q.qid);
     var doc = {
       qid: q.qid, by: S.uid, choices: ans.choices,
       choice: ans.choices.length === 1 ? ans.choices[0] : '',   // 旧形式との互換（単一選択のときだけ）
       text: ans.text, hint: ans.hint,
-      question: str(q.text), phase: str(q.phase), at: new Date().toISOString()
+      question: str(q.text), phase: str(q.phase), at: new Date().toISOString(),
+      // 選び直しで質問が列から外れていても再現できるよう、選択肢のラベルも残す
+      options: (Array.isArray(q.options) ? q.options : []).map(function (o) { return str(o && o.label); }).filter(Boolean),
+      multi: q.multi === true
     };
+    if (before) {
+      // 選び直し・やり直し: 版を上げ、前の回答を 1 つだけ畳み込む（ドキュメントは増やさない）
+      doc.rev = (typeof before.rev === 'number' ? before.rev : 1) + 1;
+      doc.prev = { choices: choicesOf(before), text: str(before.text), hint: !!before.hint, at: str(before.at) };
+    }
     S.db.collection('answers').doc(q.qid + '--' + S.uid).set(doc).then(function () {
       S.busy = false; S.redo = ''; S.sel = [];
       // スナップショット到着を待たずに次の質問へ進む
       S.answers = S.answers.filter(function (a) { return !(a.qid === doc.qid && a.by === doc.by); });
       S.answers.unshift(doc);
-      S.last = { qid: doc.qid, line: answerLine(doc) };
-      // 続けて答えているあいだは通知を 1 回にまとめる（Claude は起きるたびに未反映の回答をすべて読む）
+      S.last = { qid: doc.qid, line: answerLine(doc), prevLine: before && !before.hint ? answerLine(before) : '' };
+      // 続けて答えているあいだは通知を 1 回にまとめる（Claude は起きるたびに未反映の回答をすべて読み、
+      // ターンの終わりにも未反映を確かめる）。前の通知から LATE_MS を過ぎたら改めて知らせる
       var waiting = pending().some(function (a) { return a.qid !== doc.qid; });
-      if (S.notify === 'ok' && waiting && Date.now() - S.notifiedAt < 60000) render();
+      if (S.notify === 'ok' && waiting && Date.now() - S.notifiedAt < LATE_MS) render();
       else notifyClaude();
     }, function (e) {
       S.busy = false;
@@ -555,6 +651,7 @@
 
   function start(db, user) {
     S.db = db; S.user = user;
+    setInterval(drawModel, 30000);   // 反映待ちの経過時間を進める（反映エリアだけ描き直す）
     var staleTimer = setTimeout(function () { S.stale = true; render(); }, 10000);
     function live() { clearTimeout(staleTimer); S.stale = false; }
 

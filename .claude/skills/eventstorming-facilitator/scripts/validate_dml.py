@@ -68,12 +68,22 @@ def _format_error(err) -> str:
         exp = err.validator_value
         exp = ", ".join(exp) if isinstance(exp, list) else exp
         hint = f"（期待: {exp} / 実際: {type(err.instance).__name__}）"
+        # 名前つきの辞書（params / attrs / events / options …）の場所に、名前だけの文字列を渡した
+        if exp == "object" and isinstance(err.instance, str) and "name" in (err.schema.get("properties") or {}):
+            hint += f"（ヒント: 文字列ではなく {{name: {err.instance}}} で始まる辞書で書く）"
     elif err.validator == "required":
         missing = err.validator_value or []
         for prop in missing:
             if prop in _CONDITIONAL_REQUIRED and prop not in (err.instance or {}):
                 hint = f"（ヒント: {_CONDITIONAL_REQUIRED[prop]}）"
                 break
+    elif err.validator == "not":
+        # `not: {required: [a, b]}` 由来（brs[] の next/terminal、policy の trg/trgs）。
+        # jsonschema の既定文言「{...} should not be valid under {'required': [...]}」は読みにくい。
+        req = (err.validator_value or {}).get("required") if isinstance(err.validator_value, dict) else None
+        if req and len(req) >= 2:
+            names = " と ".join(f"`{k}`" for k in req)
+            return f"{loc}: {names} は同時に指定できません（どちらか一方だけ書いてください）"
     return f"{loc}: {err.message}{hint}"
 
 
