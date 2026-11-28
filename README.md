@@ -110,6 +110,24 @@ python3 .claude/skills/dimensional-modeling-facilitator/scripts/dimml_build.py -
 open dist/eventstorming/*.html   # または任意のブラウザで開く
 ```
 
+5. （任意・クラウドのセッション向け）セッションの成果を自動でコミットさせる。クラウドのコンテナは破棄されると未コミットのファイルが消える。スキルは既定ではユーザーの指示なしに git を操作しないが、セッション冒頭に「区切りごとにコミットしてよいか」を 1 回だけ聞く。権限の確認で毎回止まらないようにするには、`.claude/settings.local.json`（自分だけ）か `.claude/settings.json`（チーム全体）に、対象を絞った許可を書く:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add docs/eventstorming/*)",
+      "Bash(git add docs/skill-improvements/*)",
+      "Bash(git add docs/dimensional/*)",
+      "Bash(git commit -m *)",
+      "Bash(git push -u origin *)"
+    ]
+  }
+}
+```
+
+`git add -A` や `git push --force` は含めない（セッションの DML と改善メモ以外を巻き込まないため）。
+
 ### 使い始める
 
 Claude Code に話しかけるだけ。「イベントストーミングやろう」「スタースキーマを設計したい」などでスキルが起動する。新規 DML は `dmlctl init`、新規 DimML は `references/template.dimml.yaml` をコピーして `session` を埋めて作る（完成例は `examples/retail-sales.dimml.yaml`）。Artifact ツールが使えるセッションでは、HTML を Artifact として公開し、質問パネルに 1 問ずつ出して回答を DML に反映するグリル運用ができる（`eventstorming_build.py <dml> --artifact`、詳細は SKILL.md「Artifact 上のグリル」。ディメンショナル側は未対応）。

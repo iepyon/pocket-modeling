@@ -363,5 +363,87 @@ class GrillPendingTest(unittest.TestCase):
             self.assertEqual(rows[0]["qid"], "q-9")  # doc_id から補う
 
 
+class BuilderMarksTest(unittest.TestCase):
+    """ビルダー: 訳未登録の印・上部の件数・AI が選んだ決定の印・空のモデルの案内・レーンの日本語名。"""
+
+    def _build(self, model) -> str:
+        import eventstorming_build as eb
+        with tempfile.TemporaryDirectory() as d:
+            src = Path(d) / "docs" / "eventstorming" / "t.dml.yaml"
+            src.parent.mkdir(parents=True)
+            src.write_text(yaml.safe_dump(model, allow_unicode=True), encoding="utf-8")
+            out = eb.build(src, Path(d) / "out")
+            return out.read_text(encoding="utf-8")
+
+    def test_empty_model_shows_guide(self):
+        html = self._build({"session": {"id": "t", "domain": "d"}})
+        self.assertIn("質問に答えると、ここにモデルが育ちます", html)
+        self.assertNotIn('class="label-gaps"', html)
+
+    def test_untranslated_marks_and_lane_label(self):
+        html = self._build({
+            "session": {"id": "t", "domain": "d"},
+            "contexts": [{"name": "ordering", "label_ja": "注文", "lang": {"cmds": {"PlaceOrder": "注文する"}}}],
+            "narratives": [{"id": "happy", "kind": "happy", "entry": "客が注文する", "prose": "p"}],
+            "scenarios": [{"name": "客が注文する", "ctx": "ordering", "actor": "Customer",
+                           "cmd": "PlaceOrder", "evt": "OrderPlaced"}],
+        })
+        self.assertNotIn("質問に答えると、ここにモデルが育ちます", html)
+        self.assertIn("日本語ラベル未登録: 2 件", html)
+        self.assertIn('class="untr"', html)
+        self.assertIn('注文<span class="lane-id">ordering</span>', html)
+        # 登録済みのコマンドには印が付かない
+        self.assertIn("注文する</div>", html)
+
+    def test_ai_decision_badge(self):
+        html = self._build({
+            "session": {"id": "t", "domain": "d"},
+            "decisions": [
+                {"id": "D1", "topic": "接客", "chosen": "a", "decided_by": "ai-persona",
+                 "options": [{"name": "a", "adopted": True}]},
+                {"id": "D2", "topic": "支払い", "chosen": "b", "decided_by": "ai-default",
+                 "options": [{"name": "b", "adopted": True}]},
+                {"id": "D3", "topic": "焙煎", "chosen": "c", "options": [{"name": "c", "adopted": True}]},
+            ],
+        })
+        self.assertIn("AI が選択（要確認）", html)
+        self.assertIn("AI が選択（おまかせ）", html)
+        self.assertEqual(html.count('<span class="ai-badge'), 2)
+
+
+class GrillPanelBrowserTest(unittest.TestCase):
+    """質問パネルの選び直し（Playwright。node と playwright が無ければ skip）。"""
+
+    def test_reselect_flow(self):
+        import shutil
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node がありません")
+        probe = subprocess.run([node, "-e", "require('playwright')"], capture_output=True)
+        if probe.returncode != 0:
+            self.skipTest("playwright がありません")
+        import eventstorming_build as eb
+        with tempfile.TemporaryDirectory() as d:
+            src = Path(d) / "docs" / "eventstorming" / "t.dml.yaml"
+            src.parent.mkdir(parents=True)
+            src.write_text(yaml.safe_dump({"session": {"id": "t", "domain": "d"}}), encoding="utf-8")
+            page = eb.build(src, Path(d) / "out", artifact=True)
+            r = subprocess.run([node, str(Path(__file__).with_name("grill_panel_check.js")), str(page)],
+                               capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        out = json.loads(r.stdout)
+        self.assertEqual(out["errs"], [])
+        self.assertIn("あなた・モデルに反映済み", out["log"][0])
+        self.assertIn("元になった決定: D3", out["log"][0])
+        self.assertEqual(out["formQ"], "接客はどうする？")
+        self.assertIn("前の回答：キャラが接客", out["note"])
+        w = out["written"][0]["d"]
+        self.assertEqual((w["choices"], w["rev"], w["prev"]["choices"]), (["人が接客"], 2, ["キャラが接客"]))
+        self.assertIn("キャラが接客 → 人が接客", out["strip"])
+        self.assertEqual(out["qAfter"], "二問目？")
+        self.assertIn("反映が始まっていません", out["model"])
+        self.assertIn("10 分前に届いた", out["model"])
+
+
 if __name__ == "__main__":
     unittest.main()

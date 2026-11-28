@@ -1,5 +1,20 @@
 # 最後まで自動で進めたときに見つかった課題（2026-11-28）
 
+> **対応状況（2026-11-28）**
+> - ✅ A-1: `decisions[].decided_by`（`user` / `ai-default` / `ai-persona`）をスキーマに足し、`dmlctl view --view=ai-decided` で本人未確認の決定を一覧できる。HTML の決定カードに「AI が選択（要確認）」の印。自動実行モードの手順を SKILL.md に書いた
+> - ✅ A-2: 理由の分からない `why_not` は省略してよい（playbook §11・SKILL.md）。coverage view は不採用案の `why_not` を残欠に数えない。意味チェック `decision-rationale-clarity` が「同じ文言の `why_not` が 3 件以上」を指摘する。パネルの「選ばなかった理由」欄は見送った（質問が重くなるため。必要な論点だけ次の質問で聞く）
+> - ✅ A-3: 意味チェック `decision-rationale-clarity` が、決着済みの論点への「確認中」が残った `note` を指摘する。質問を閉じるときに一覧する専用コマンドは見送った
+> - ✅ B: 構造チェックを 5 本足した（すべて warn）。`alt_narrative_entry` / `unreachable_scenario` / `next_bypasses_policy` / `policy_scenario_overlap` / `phase_drift`。なお「POLICY の CMD へ `next` でつなぐ」こと自体は、ビルダーがフローを描くのに使う正しい書き方だった（前の evt → POLICY → `next` のシナリオ）。問題は「前のシナリオが POLICY の起動イベントを発行していないのに直結する」ことなので、`next_bypasses_policy` はそれを見る。運用モードと不変条件の区別、POLICY とシナリオの書き分けは playbook §6・§8 に足した。サブエージェントの完了通知を待つ手順は quality-check.md に足した
+> - ✅ C-1: `--value` が YAML として読めないとき、スタックトレースではなく `--value-file` を案内する
+> - ✅ C-2: SKILL.md に `--dry-run && 本書き込み` の書き方を載せた。`dmlctl batch` は見送った（この書き方と C-1 でほぼ防げるため）
+> - ✅ C-3: hint に項目の意味と正しい例（`meaning` / `correct_example`）を出す。`next` と `terminal` の排他エラー、`params` に文字列を渡したときのエラーを分かりやすい文言にした
+> - ✅ C-4: `dmlctl derive-agg-events <file> [--agg=<Name>] [--dry-run]`
+> - ✅ C-5: 集約を足すときに `lang.states` も同時登録する、と SKILL.md に書いた
+> - ✅ D-1: 冒頭に 1 回だけ自動コミットの可否を聞く、権限が通らないときの報告は 1 回だけ、を SKILL.md に書いた。権限ルールの書き方は README のセットアップ 5
+> - ✅ D-2: `grill/current` と `grill/progress` を `ArtifactData` の `batch` で 1 回で書く手順（例つき）
+> - △ D-3: 質問を出す前に `lang` のラベルと見比べる手順だけ足した。同じ読みの別の字を機械で見つける点検は見送った（精度が出ないため）
+> - ✅ D-4: `phase_drift` が、中身から見たフェーズと `session.phase` のずれを警告する
+
 コーヒーショップのセッション（`eventstorming-20261128-1105`）で、オーナーから「ここからは自動で最後までやりきって、課題を見つけたら改善メモに」と指示があった。
 選択は、「昔ながらの手作業好きかつメカ好きの顧客」の目線で AI が行った。その実行中に見つけた課題をまとめる。
 
