@@ -334,6 +334,27 @@ class DmlctlTest(unittest.TestCase):
         self.assertIn("YAML として読めません", r.stderr)
         self.assertNotIn("--value-file", r.stderr)
 
+    def test_unresolvable_path_is_one_line_error(self):
+        """存在しないキー・型の合わないパスは、スタックトレースではなく案内と exit 2 にする。"""
+        cases = [
+            ("remove", self.file, "--path=scenarios", "--where=name=x"),
+            ("remove", self.file, "--path=nope"),
+            ("remove", self.file, "--path=session.id.deep"),
+            ("remove", self.file, "--path=session", "--where=id=t"),
+            ("update", self.file, "--path=scenarios", "--where=name=x", "--set-key=cmd", "--value=A"),
+            ("set", self.file, "--path=contexts[name=zz].label_ja", "--value=a"),
+            ("set", self.file, "--path=session.id.deep", "--value=a"),
+        ]
+        before = Path(self.file).read_text(encoding="utf-8")
+        for case in cases:
+            r = _dmlctl(*case, "--no-postprocess")
+            self.assertEqual(r.returncode, 2, (case, r.stderr))
+            self.assertIn("を解決できません", r.stderr, case)
+            self.assertNotIn("Traceback", r.stderr, case)
+        self.assertEqual(Path(self.file).read_text(encoding="utf-8"), before)  # 何も書き換えない
+        r = _dmlctl("remove", self.file, "--path=scenarios", "--where=name=x", "--no-postprocess")
+        self.assertIn("いま有るキー: session", r.stderr)
+
     def test_derive_agg_events(self):
         _dmlctl("add", self.file, "--to=scenarios",
                 "--item={name: a, ctx: bc, actor: A, cmd: X, agg: Order, brs: [{evt: E1}, {evt: E2}]}",

@@ -216,23 +216,42 @@ def _parse_path(path: str) -> list:
     return segments
 
 
+class _PathError(ValueError):
+    """--path / --to が DML の中で解決できない（キーが無い・範囲外・型が合わない）。
+
+    `main()` がまとめて受け、スタックトレースではなく 1 行の案内と exit 2 にする。"""
+
+
+def _missing(cursor, seg) -> "_PathError":
+    """cursor の下に seg が無いときのエラー（いま有るキー／件数を添える）。"""
+    if isinstance(cursor, dict):
+        keys = ", ".join(str(k) for k in cursor) or "（なし）"
+        return _PathError(f"'{seg}' がありません（いま有るキー: {keys}）")
+    if isinstance(cursor, list):
+        return _PathError(f"'{seg}' はリスト（{len(cursor)} 件）の要素として解決できません")
+    return _PathError(f"'{seg}' の手前が辞書でもリストでもありません（{type(cursor).__name__}）")
+
+
 def _step(cursor, seg):
     """1 セグメント分だけ降りる。str/int はそのまま添字、_Selector は
-    リストから該当要素を線形検索して返す。"""
+    リストから該当要素を線形検索して返す。解決できなければ _PathError。"""
     if isinstance(seg, _Selector):
         if not isinstance(cursor, list):
-            raise ValueError(f"{seg} はリストにのみ適用できます")
+            raise _PathError(f"{seg} はリストにのみ適用できます")
         for elem in cursor:
             if isinstance(elem, dict) and elem.get(seg.key) == seg.val:
                 return elem
-        raise KeyError(f"{seg.key}={seg.val!r} の要素が見つかりません")
-    return cursor[seg]
+        raise _PathError(f"{seg.key}={seg.val!r} の要素が見つかりません")
+    try:
+        return cursor[seg]
+    except (KeyError, IndexError, TypeError):
+        raise _missing(cursor, seg) from None
 
 
 def _resolve_parent(data, segments: list):
     """セグメント列の親要素と最終セグメントを返す。"""
     if not segments:
-        raise ValueError("path は空にできません")
+        raise _PathError("path は空にできません")
     cursor = data
     for seg in segments[:-1]:
         cursor = _step(cursor, seg)
@@ -246,7 +265,7 @@ def _resolve_list(data, path: str) -> list:
     for seg in segments:
         target = _step(target, seg)
     if not isinstance(target, list):
-        raise ValueError(f"{path} はリストではありません")
+        raise _PathError(f"{path} はリストではありません")
     return target
 
 
@@ -565,7 +584,10 @@ def cmd_set(args) -> int:
             file=sys.stderr,
         )
         return 2
-    parent[last] = value
+    try:
+        parent[last] = value
+    except (IndexError, TypeError):
+        raise _missing(parent, last) from None
     n = len(value) if isinstance(value, (list, dict)) else None
     suffix = f"（{n} 件）" if n is not None else ""
     print(f"✅ {args.path} を設定しました{suffix}", file=sys.stderr)
@@ -689,7 +711,10 @@ def cmd_remove(args) -> int:
                 file=sys.stderr,
             )
         else:
-            del parent[last]
+            try:
+                del parent[last]
+            except (KeyError, IndexError, TypeError):
+                raise _missing(parent, last) from None
             print(f"✅ {args.path} を削除しました", file=sys.stderr)
     return _save(path, yml, data, args)
 
@@ -1246,7 +1271,12 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
-    return args.func(args)
+    try:
+        return args.func(args)
+    except _PathError as e:
+        target = getattr(args, "path", None) or getattr(args, "to", None) or ""
+        print(f"❌ パス '{target}' を解決できません: {e}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
