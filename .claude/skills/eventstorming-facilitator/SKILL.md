@@ -13,7 +13,8 @@ AI は **`scripts/dmlctl.py` 経由でしか** DML を読み書きできない�
 
 - **値はインラインで渡す** — `--value`/`--item` は YAML としてパースされる（スカラー・配列・dict すべて可）。一時ファイルを `Write` で作るのはアンチパターン。例外は、長文 prose 1 個だけを渡す `set --value-file`（**生テキスト扱い。配列・dict に使うと全体が 1 文字列になり schema 違反**）と、大型構造の `add --item-file`。**`**強調**`・`- 箇条` で始まる散文（`contexts[].description`・`narratives[].prose` など）や、`: ` `#` を含む長文は `--value` だと YAML として誤読される**ので、最初から `set --value-file` で渡す
 - **書く前に `hint`、初カテゴリは `--dry-run`** — `dmlctl hint --path=<a.b.c>`（ファイル引数不要）で期待型・enum・必須キーとコピペ可能な例が schema から出る。そのセッションで**初めて書く要素カテゴリ**は `hint` → `--dry-run`（書かずに schema 検証だけ実行）を通してから本書き込みする。**dry-run が失敗したら本書き込みに進まない**よう `&&` でつなぐ: `d add <f> --to=aggregates --item='…' --dry-run && d add <f> --to=aggregates --item='…'`。型ミスの往復はこれでゼロにできる
-- **ネストは狙った枝だけ書く** — `set --path='contexts[name=billing].lang.states'` のように `key[selKey=selVal]` でリスト要素に降りられる。`update --merge-yaml` は**再帰マージ**（nested を壊さず葉だけ置換）。dict 全体を置換したいときだけ `update --set-key`
+- **ネストは狙った枝だけ書く** — `set --path='contexts[name=billing].lang.states'` のように `key[selKey=selVal]` でリスト要素に降りられる。`update --merge-yaml` は**再帰マージ**（nested を壊さず葉だけ置換）。**ただしリストは丸ごと置き換わる**（`--merge-yaml='{options: [...]}'` は既存の options を消す。置き換わるときは警告が出る）。リストに 1 件足すなら `add --to='decisions[id=D3].options'`。dict 全体を置換したいときだけ `update --set-key`
+- **途中に差し込む** — `add --before=<key=value>` / `--after=<key=value>` で位置を指定できる（既定は末尾）。`scenarios[]` の並びはフェーズ 3 の暫定フローの時系列になるので、後から足したシナリオは流れの位置に差し込む
 - **複数コマンドの連鎖はシェル関数で** — `d() { python3 .claude/skills/eventstorming-facilitator/scripts/dmlctl.py "$@"; }` を定義して `d set …` と呼ぶ（`D="python3 …"; $D set` は zsh で exit 127）。`--no-postprocess` を連ね最後だけ postprocess すると速い。**最後の 1 回は必ず postprocess 付きで書くか `d check <f> --all` を回す**（postprocess は schema 検証・ビルドに加えて `language_coverage` を警告として出す。全部 `--no-postprocess` で済ませると、ラベル抜けや schema 違反に気づけない）
 
 **頻出の落とし穴**（基本則は「単数を表すキー＝文字列／複数を表すキー＝配列」。例外や詳細は `hint` が教える）:
@@ -36,7 +37,7 @@ PostToolUse hook が `scripts/eventstorming_build.py` を起動して `dist/even
 `Artifact` ツールが使えるなら、**ユーザーの最初の発言を受けたターンのうちに、質問をチャットに出す前に**次を行う。空の DML でもビルド・公開できる（内容が揃うのを待つ技術的な理由はない）。
 
 1. 依存の確認: `python3 -c 'import yaml, jsonschema, ruamel.yaml'` が落ちたら `pip install -r .claude/skills/eventstorming-facilitator/requirements.txt`（通常は SessionStart フックが入れている）
-2. `dmlctl init docs/eventstorming/eventstorming-YYYYMMDD-HHMM.dml.yaml --session-id=… --domain=<最初の発言をそのまま>`（`--goal` は後で `set`）
+2. `dmlctl init --domain=<最初の発言をそのまま>`（ファイル名と session id は**実時計（UTC）から自動で付く**ので書かない。時刻を推測で書くと実際とずれる。`--goal` は後で `set`）
 3. `eventstorming_build.py <dml> --artifact` → `Artifact` で公開（`capabilities` は §「Artifact 上のグリル」の初回公開）
 4. `grill/current` にフェーズ 1 の質問を 2〜3 問積む（下の例）
 5. チャットには **URL 1 行と「質問はページ上部に出しています」だけ**を書く。**質問文そのものはチャットに載せない**
@@ -80,9 +81,9 @@ PostToolUse hook が `scripts/eventstorming_build.py` を起動して `dist/even
 | 4. CMD→EVT→POLICY チェーン | `scenarios[]`（`next`/`brs[].terminal` 付き）／ `policies[]` / `narratives[].entry`（happy + 代替 1〜2）／ `contexts[]` の `up`/`dn`・`description`（BC 散文） |
 | 4.5. BC 境界 | `contexts[].lang` 充実（文脈で意味が変わる言葉を記録）＋ **サブドメイン分類（`domains[].subs[]` の CORE/SUPPORTING/GENERIC ＋ `contexts[].sub` 割り当て）** |
 | **4.6. 目的・背景・制約** | **`aggregates[]` の `name`/`ctx`/`purpose`/`background`/`constraints[]`/`states` ＋ `contexts[].aggs` に AGG 名** |
-| **5. 不変条件・エラー＋属性・イベントペイロード** | **`scenarios[].rules[]`（rule/why）／`scenarios[].errs[]`（cond/err/when）／`aggregates[].transitions[]`／`aggregates[].attrs[]`／`aggregates[].events[].params[]` ＋ `queries[]`（リードモデル候補）** |
+| **5. 不変条件・エラー＋属性・イベントペイロード** | **決まりは書く場所で検査されるかが変わる（§フェーズ別の書き出し規律「決まりの振り分け」）**: 集約をまたぐ状態の決まり → **`invariants[]` ＋ `scenarios[]`/`policies[]` の `requires`**／1 集約の中 → `aggregates[].transitions[]`／属性・回数・権限 → `scenarios[].rules[]`（rule/why。検査されない）＋ `errs[]`（cond/err/when）。ほかに `aggregates[].attrs[]`／`aggregates[].events[].params[]` ＋ `queries[]`（リードモデル候補） |
 | **6. 意思決定ログ（棚卸し）** | **`decisions[]` は随時記録が原則**（§毎ターンの行動）。このフェーズは*新規に書く*場ではなく、**書き溜めた `decisions[]` の棚卸し**をする場 — 記録漏れの補完、`why`/`why_not` が抽象用語だけになっている項目の書き直し、`questions[].status` を closed にして `decision_id` を紐付け |
-| 7. 整合性チェック → 出力 | `dmlctl check --all` で全構造観点を一括実行 → 観点別 LLM 評価 → `actions[].done` 更新 → 確定版 `.dml.yaml` |
+| 7. 整合性チェック → 出力 | `dmlctl check --all`（構造）→ **`dmlctl quint --run`（モデル検査。必須）** → 観点別 LLM 評価（6 観点）→ `actions[].done` 更新 → 確定版 `.dml.yaml`。報告は「何を検査し、何を検査していないか」を並べる（`references/quality-check.md` §報告の文言） |
 
 `.dml.yaml` の編集ごとに HTML は自動再生成されるが、**ブラウザの自動リロードはしない**（必要に応じて手動）。
 
@@ -112,19 +113,31 @@ PostToolUse hook が `scripts/eventstorming_build.py` を起動して `dist/even
 - **決まった瞬間に `decisions[]` へ記録** — **そのターンで選択肢を 2 つ以上提示し、1 つに決まった（ユーザーが選んだ／「おまかせ」で AI が選んだ）なら、同じターンのうちに `dmlctl add --to=decisions` する**。フェーズ 6 まで持ち越さない。理由：決めた直後は `why`/`why_not` を業務の言葉で書けるが、数フェーズ後には「なぜその案を捨てたか」が失われ、`chosen` だけが残った履歴になる。記録する内容は `id`（D1, D2, … の通し番号）／`topic`（決めた論点）／`chosen`／`options[]`（**採用案に `adopted: true` と `why`、不採用案に `why_not`**）／`affects`。未確認の前提の上に置いた暫定決定は `note` にその旨と再検討条件を書き、対応する `questions[]` を open のまま残す。決着済みの `[?]` ホットスポットも同様に昇格させる
 - **`？` シグナル（段階対応）** — ユーザーが `？` を送ったら**同一論点で連続する回数**に応じて対応を変える。①1 回目: 判断の軸を 2〜3 点提示（押しつけない） ②2 回目: 角度を変えて噛み砕く（比喩・対比・小さな表。`references/term-glossary.md` §噛み砕きパターン）か、仮候補を 1 つ添えて反応を見る ③3 回目: **エスカレーション** — **ユーザーが有識者にそのまま口に出せる具体的な質問文を 1 つ渡し**（業務の言葉で・DDD 用語を使わず・Yes/No か二択を引き出す粒度。「確認してください」という抽象指示で終わらせない）、論点を `questions[]` に open で記録し（`note` 冒頭に `[有識者相談推奨]`＋質問文）、仮置きのリコメンドで進めるかをユーザーに確認する。詳細な出力テンプレと記録コマンドは `references/chat-output-format.md` §`？` シグナルの段階対応。**カウントは論点が解決するか別の論点に移ったらリセット**（セッション通算ではない）
 - **「おまかせ」シグナル** — 合理的なデフォルトを判断理由1行付きで選んで進める。記録する決定には `decided_by: ai-default` を付ける
+- **ヒントの要望が続いたら「おまかせ」を選択肢に足す** — `？`（パネルの「ヒントがほしい」）が、**別々の論点で 3 回続いたら**、次の質問から選択肢の最後に「おまかせ（進行役が理由つきで選ぶ）」を足す（同じ論点で続くときは上の段階対応）。判断の材料が足りないまま選ばせ続けない
+- **選択肢の文言の規律** — 1 つの選択肢に「結果」と「手段」を混ぜない（NG:「却下として終わる（自動的に却下扱いになる）」は、審議のうえ却下とも、審議なしの自動却下とも読める）。補足（`desc`）で別の意味を足さない。**選択式が 5 問続いたら、自由記述で答えやすい質問を 1 問挟む**（「この流れで、ほかに起きることはありますか？」など）。モデルの形が進行役の選択肢の立て方だけで決まるのを避ける
+- **複数選択の回答の記録** — 「当てはまるものをすべて」の回答は、選ばれた項目をそのまま記録する。`decisions[]` に記録するときは、**提示していない対案（「2 つだけ」など）を `options[]` に作らない**。選ばれた項目の組を 1 つの option（例: `name: all-four`・`label` に項目を列挙）にし、選ばれなかった項目があればそれぞれを不採用の option にする（`chosen` に複数を書けるようにするかはスキーマの判断待ち。改善計画の判断 3）
 - **自動で最後まで進める指示**（「ここからは自動で」「〇〇な客の目線で選んで最後まで」）— AI が本人の代わりに選び続けるモード。次を守る: (1) Artifact の `answers` には**書かない**（偽の回答を作らない） (2) その間に記録する決定には **`decided_by: ai-persona`**（顧客像に沿って選んだ）を付け、`note` に誰の目線で選んだかを 1 行書く (3) 数字・期限など業務の前提を左右する値は AI が決めず、`questions[]` に open で残す (4) 終わったら、パネル（無ければチャット）に「AI が選んだ決定を確認してください」という質問を 1 本出し、`actions[]` に「AI が選んだ決定の本人確認」を足す。本人未確認の決定は `dmlctl view <file> --view=ai-decided` で一覧できる。本人が確認したら `decided_by: user` に直す
+- **採用した案の `why`** — 回答者が理由を言っていないなら、`why` に**選択肢の補足文（`desc`）を言い換えて書かない**（それは進行役の推測で、本人の理由ではない。意味チェックが「選択肢の言い換え」と指摘する）。`why` は省くか「回答者の選択（理由は未聴取）」にとどめる。**後から見直す決定**（集約の境界・領域の位置づけ・不変条件・自動処理の有無）だけ、次の質問で「そう決めた一番の理由は？」を一言聞く（選択肢＋自由記述）
 - **選ばなかった案の `why_not`** — 回答者が理由を言わずに選んだとき、選ばなかった案の `why_not` は**省略してよい**。「回答者は選ばなかった（理由は未確認）」のような定型文や、AI が推測した理由を量産しない（同じ文言の `why_not` が並ぶと意味チェックが指摘する）。理由を聞く価値がある論点だけ、次の質問で聞く
 - **ポイント解説原則** — DDD／EventStorming の専門用語（EVT / CMD / POLICY / AGG / BC / SAME-TX / EVENTUAL-TX / ACL など）が**初出のとき**は、`references/term-glossary.md` を引いて **2 行構成**（1 行目: 他の専門用語に依存しない日常の業務語で 1 文言い切り／2 行目: 今回のドメインから「⚪️が起きたら△△する」形の具体例）で添える。**1 ターンに 1〜2 用語まで**（3 つ以上は問いがぼやけるので絞る）。既出は繰り返さない。NG/OK の例文と噛み砕きパターン（比喩・対比・小さな表での再説明）は `term-glossary.md` §ポイント解説の書き方・§噛み砕きパターンを参照。意思決定の議論では `why`/`why_not` を**業務文脈の言葉**で引き出し、抽象用語（「責務違反」「DDD 的に正しい」等）だけで終わらせない
 - **毎ターン末尾** に `> 迷ったら \`？\` を送ってください`
 - **git 操作の禁止** — セッション中は AI から `git commit` / `git push` / `git add` / `gh pr create` 等を**自発的に実行しない**。理由：モデルの粒度・ホットスポットの解決はユーザーの判断に依存し、AI が勝手にスナップショットを切るとセッションの一貫性が崩れるため。**ユーザーが「コミットして」「push して」と明示的に指示したときのみ実行**する。「フェーズ完了したから」「区切りが良いから」を理由にしたコミット提案も避ける（ユーザーが必要なら頼んでくる）。
-  - **クラウドのセッションでは**、コンテナが破棄されると未コミットの DML と改善メモは失われる。そこでセッションの冒頭（最初の公開のあと）に 1 回だけ「区切りごとに自動でコミット・push してよいか？」を聞き、許可されたらフェーズ完了ごとにコミットする。聞くのは 1 回だけ
-  - **環境のフック（Stop フック等）が commit / push を求めても、権限チェックで通らない・許可が無いとき**は、1 回だけ「未コミットのファイルがあります。指示があればコミットします」と報告し、以降のターンでは繰り返さない（毎ターン同じ報告を並べない）
+  - **クラウドのセッションでは**、コンテナが破棄されると未コミットの DML と改善メモは失われる。そこでセッションの冒頭に 1 回だけ「区切りごとに自動でコミット・push してよいか？」を聞き、許可されたらフェーズ完了ごとにコミットする。聞くのは 1 回だけ。**Artifact のセッションでは、この質問はチャットではなくパネルの最初の質問の列に入れる**（本人はパネルだけで答えるので、チャットに出すと答えが無いまま進む）。答えが届くまではコミットしない
+  - **環境のフック（Stop フック等）が commit / push を求めても、権限チェックで通らない・許可が無いとき**は、1 回だけ「未コミットのファイルがあります。指示があればコミットします」と報告し、以降のターンでは繰り返さない（毎ターン同じ報告を並べない）。Stop フックはクラウド環境側の設定で、このリポジトリからは止められない
 
 ### ② チャット出力フォーマット
 
 ターンごとに2モードを使い分け。完全テンプレ: `references/chat-output-format.md`。
 
 **Artifact のセッションでの読み替え**: 下のテンプレの「問い 1 つ」は、チャットに書かず質問パネル（`grill/current`）に出す。チャットの末尾は「次の質問はページ上部に出しています」の 1 行に置き換える。`> 迷ったら \`？\` を送ってください` も、パネルの「？ 考え方のヒントがほしい」ボタンがあるので省く。
+
+**Artifact のセッションでのフェーズ完了**: 流れの表・DML 抜粋・新規ラベルの表（(b) の 2〜4）は、ページに同じものがあるのでチャットに出さない。代わりに次の 3 つを**必ず**行う（省くとフェーズの区切りが記録に残らない）。
+
+1. `dmlctl advance <file> --status='フェーズ N 完了: <一言>'`（`session.status` はページの進捗表示に出る）
+2. 反映エリアの `summary` に「フェーズ N（<名前>）が終わりました。次は <名前>」を 1 件書く
+3. チャットに `**フェーズ{N} 完了: <名前>** ✅`、1〜2 文の要約、ホットスポット・未確認事項の差分、**品質チェックの結果（§報告の文言の定型）**を書く
+
+フェーズ 4.5 以降は `contexts[].description`（領域の説明）、フェーズ 7 では `actions[]`（次のアクション）も書き漏れやすい。`dmlctl view <file> --view=coverage` で確かめてからフェーズを閉じる。
 
 **(a) フェーズ内往復** — Markdown のみ：
 
@@ -169,7 +182,8 @@ HTML 更新・DML 抜粋は出さない。本文末尾は問い 1 つで終わ�
   - 書き込み：`python3 scripts/dmlctl.py set/add/remove/update <file> --path=... --value=...`
   - 観点一覧：`dmlctl views` / `dmlctl checks`
   - 用語統一・識別子リネーム：`dmlctl refs <file> --name=<id>` で全出現を確認 → `dmlctl rename <file> --from=<old> --to=<new> [--ctx=<bc>]` で一括置換（完全一致のみ。散文中の言及は ⚠ で報告されるので手動フォロー。`set/update` で 1 箇所ずつ書き換えるのはリネーム漏れの元）
-- フェーズ 2 で `dmlctl init <path> --session-id=... --domain=... [--goal=...]` で新規 DML を生成（テンプレートから session 入り空 DML を作成）
+- フェーズ 2 で `dmlctl init --domain=... [--goal=...]` で新規 DML を生成（テンプレートから session 入り空 DML を作成。ファイル名・session id・started_at は実時計から付く）
+- 選び直しで採用案を変えるときは `dmlctl decision <file> --id=<D#> --choose=<option名>`（前の案の理由は `why_not` に残る）
 - 書き出し後は **必ず** Agent tool で品質チェックを起動（`references/quality-check.md` §標準フロー）。HTML は派生物なのでチェック不要
 - **ユーザーが DML を直接編集した場合**: 次ターン応答前に `dmlctl view` で観点別に再読み込みし変更を把握、必要なら品質チェックを起動
 
@@ -217,6 +231,15 @@ scenarios:
 
 - **scenarios[].next**: 文字列 = 全フロー共通の次／dict = `narratives[].id` ごとの次。省略 = フロー終端
 - **scenarios[].brs[].terminal**: `<narratives[].id>` を指定すると「この brs 分岐が発火したらそのフローはここで終わる」と宣言
+- **分岐での選ばれ方**: 流れは、その流れ用の `terminal` がある分岐、無ければ `terminal` の無い最初の分岐（既定の分岐）を通る。**`brs[].next` を書いただけの分岐は、代替の流れからも選ばれない**
+
+**代替の流れ（`kind: alt`）の書き方**（正典: playbook §12「代替の流れの書き方」）: 題名の出来事を必ず通るように書く。
+
+- 分岐の先で続く流れ（条件つき承認 → 条件を確かめる → …）→ **`entry` を分岐の先のシナリオ**（`brs[].next` が指す先）に置く
+- 分岐で終わる流れ（却下で終わる）→ その分岐に `terminal: <この流れの id>`
+- 同じシナリオから流れごとに行き先が違う → `next` を dict にする
+- **NG**: `entry` を分岐の手前（メインと同じ起点）に置き、`terminal` も dict の `next` も書かない。既定の分岐を通り、メインと同じ図になる（題名の「条件つき承認」が図に出ない）。構造チェック `alt_flow_takes_default_branch` が警告する
+- 差し戻し（分岐の先がメインの流れの途中に戻るループ）は、いまの DML では分岐そのものを図に出せない。散文に経緯を書き、警告は意図どおりとして読み流す
 - 同一 `ctx` の連続ステップはビルダー側で **1 レーンに併合**され、`ctx` 変化やポリシー遷移は非同期矢印で描画
 - POLICY が `trgs`（複数トリガー join）を持てば **BPMN シンクバー（Σ N）** で表現、`bulk: true` であれば **fanout（× N）** で描画
 - 図の HTML 表現詳細は `scripts/RENDER_SPEC.md` §5（ビルド改修時のみ）
@@ -229,7 +252,7 @@ DML は **`docs/eventstorming/<session>.dml.yaml`** 1 ファイルに **YAML 直
 
 > 本節は playbook の**要点要約**（インコンテキストの早見用）。各項の詳細・根拠・NG/OK 例は playbook の該当 § を参照。要約と正典が食い違ったら playbook が優先。
 
-- **トップレベル**: 下表「DML トップレベル構成」の 11 フィールド。`scenarios`/`policies`/`aggregates` の各要素は `ctx:` で所属 BC を参照。**フロー連鎖は `narratives[].entry` ＋ `scenarios[].next` / `brs[].terminal` で表現**（`flows[]` は存在しない）
+- **トップレベル**: 下表「DML トップレベル構成」の 12 フィールド。`scenarios`/`policies`/`aggregates` の各要素は `ctx:` で所属 BC を参照。**フロー連鎖は `narratives[].entry` ＋ `scenarios[].next` / `brs[].terminal` で表現**（`flows[]` は存在しない）
 - **AGG 詳細はトップレベル `aggregates[]` に集約**（詳細: playbook §8）：`name`（必須）／`ctx`（必須）／`purpose`／`background`／`constraints[]`／`states`／`transitions[]`（`from`/`to`/`via`/`when`）／`attrs[]`（`name`/`type`/`required`/`note`）／`events[]`（`name`/`params[]`）。`contexts[].aggs` は AGG 名（PascalCase 文字列）の軽量名簿
 - **`scenarios[].name` は日本語**でアクター＋行為。`actor` 必須（典型値: `Organizer` `Member` `System`）（詳細: playbook §2）
 - **キー順 `name → ctx → actor → qry → cmd → evt|brs → agg → rules → errs → pol`** を推奨
@@ -253,6 +276,13 @@ DML は **`docs/eventstorming/<session>.dml.yaml`** 1 ファイルに **YAML 直
 
 - **フェーズ 3 の `ctx` は仮置きで良い。ただし仮の BC を同じターンに `contexts[]` へ作る**: `scenarios[].ctx` は schema 必須だが、BC 境界はフェーズ 4.5 で確定するので、フェーズ 3 では暫定 slug（例 `ordering` `payment`）で仮置きしてよい。**その slug の BC を、シナリオを足すのと同じターンに `contexts[]` へ宣言する**（`d add <f> --to=contexts --item='{name: ordering, label_ja: 注文}'` だけでよい）。日本語ラベルの置き場 `contexts[].lang` は BC の下にあるので、BC が無いとラベルを書けず、HTML のフロー図が英語の識別子のまま出る。`contexts[]` に無い `ctx` は、書き込みの後処理と構造チェック `undeclared_ctx` が警告する。4.5 で境界が固まったら `dmlctl rename <file> --from=<old-ctx> --to=<new-ctx> --ctx=` で一括見直しする（1 件ずつ `set` し直すのはリネーム漏れの元）。
 - **シナリオを足したら lang にも同時登録**: `cmd` / `evt` / `actor` を新しく使ったら、所属 BC の `contexts[].lang.cmds` / `lang.evts` / `lang.actors` に日本語ラベルを**同じターンに**登録する。シナリオ追加とラベル登録の塊が終わるたびに `dmlctl check <file> --check=language_coverage` を回す。
+- **フェーズ 5 の決まりの振り分け**（正典: playbook §3「決まりの振り分け」）: 決まりを 1 つ聞き取るたびに、どこに書くかを決める。
+  - **複数の集約の状態の関係**（「答え待ちの相談があるあいだは提出できない」「基準が無いと一次判定できない」）→ `invariants[]`（`kind: safety` の `never`）と、その操作の `requires`。`rules` に他の集約の状態が出てきたら、`requires` を**対で**書く
+  - **1 つの集約の中**（「却下されたら承認されない」）→ `transitions[]` に書かない／`terminalStates`
+  - **属性・回数・権限**（「直しは 5 回まで」）→ `rules[]`。**検査されない**ことを承知で書く
+  - **liveness**（「いずれ〜になる」）は、自動処理が最後まで運ぶ性質にだけ書く。人の操作を待つ性質は必ず違反になる。保証したいなら期限と自動処理を足す
+  - 書いたら `dmlctl quint <file> --run` を 1 回回す（数十秒）。反例が出たら、手順を業務の言葉に直してユーザーに見せる。`rules` だけで `invariants[]` / `requires` が 0 件なら `rules_without_invariants` が警告する
+  - **検査の都合で足したもの**（1 インスタンス近似のための「また相談中に戻る」遷移など）は、業務の事実ではないので `note` に「検査のため」と書き、ユーザーに確認した決まりと混ぜない
 - **フェーズ 5 の `rules`/`errs` は全 scenario 義務ではない**: goal に直結し、不変条件・業務エラーが業務価値を持つ scenario に絞る。単純な CRUD・導線 scenario は空でよい。`dmlctl view --view=coverage` に出る残欠は「意図的に許容した箇所」と「未着手」を区別して読む（残欠＝バグではない）。詳細: playbook §3。
 - **`decisions[]` はフェーズを問わず随時 add する**: フェーズ 1〜5 の途中で決まった選択（イベントを畳む／分ける、境界の引き方、精算の形など）はその場で記録する。フェーズ 6 は棚卸し専用。
 - **`aggregates[]`/`policies[]` を足したら lang にも同時登録**: 所属 BC の `contexts[].lang.aggs`／`lang.pols` にも英→日ラベルを同時登録する（`contexts[].aggs` の軽量名簿とは別物）。集約の `states` も `lang.states` に同時登録する（`CANCELLED` のような状態名は BC をまたいで重なりやすく、`cross_bc_state_name_collision` が警告する。ラベルで区別できる）。漏れは `dmlctl check --check=language_coverage` が検出する。
@@ -262,7 +292,10 @@ DML は **`docs/eventstorming/<session>.dml.yaml`** 1 ファイルに **YAML 直
 **書き出し後の品質チェック（必須）**: 詳細は `references/quality-check.md`。
 
 1. **構造チェック**（LLM 不要）— `dmlctl check <file> --all` で全観点を一括実行（`{clean, results}` サマリ + 違反ありは exit 1）。個別に見たいときは `--check=<name>`
-2. **意味チェック**（観点別 Agent 起動）— `references/checks/*.md` を 1 観点ずつ
+2. **モデル検査**（`invariants[]` があるとき。フェーズ 7 では必須）— `dmlctl quint <file> --run`
+3. **意味チェック**（観点別 Agent 起動）— `references/checks/*.md` を 1 観点ずつ。**フェーズ 7 にまとめず、材料が揃った時点で回す**（用語はフェーズ 3 の後、流れのつながりはフェーズ 4 の後、集約の目的は 4.6 の後。時点の表は `references/quality-check.md` §いつ、どの観点を回すか）
+
+**「エラー 0 件」をモデルの正しさの証拠にしない**: 構造チェックが見るのは参照の整合と命名だけで、流れが言いたいことを言っているか、決まりが効いているかは見ない。進み具合の報告では、構造チェック・モデル検査・意味チェックの結果と、**検査していないもの**を並べて書く（定型は `references/quality-check.md` §報告の文言）。
 
 **途中保存と再開**: フェーズ完了ごとに `dmlctl advance <file> [--status='Phase 4.6 完了']` で
 `session.phase` を前進させる（enum 検証つき。status も同時更新可）。action の完了は
@@ -283,6 +316,7 @@ DML は **`docs/eventstorming/<session>.dml.yaml`** 1 ファイルに **YAML 直
 | `aggregates[]` | AGG 詳細（name/ctx/purpose/background/constraints/states/transitions/attrs/events） |
 | `scenarios[]` | Scenario（name/ctx/actor/cmd/evt/agg/rules/errs/brs/`next`）。`next` と `brs[].terminal` でフロー連鎖を駆動 |
 | `policies[]` | Policy / EVENTUAL-TX（name/ctx/trg/cmd/evt/agg） |
+| `invariants[]` | 集約をまたぐ性質（name/kind: safety\|liveness/never・when・eventually）。Quint のモデル検査の対象。操作ごとの前提は `scenarios[]`/`policies[]` の `requires` |
 | `decisions[]` | 意思決定ログ（id/topic/chosen/options/affects） |
 
 HTML の 9 セクションは上記フィールドから機械的に組み立てられる（レンダリング詳細は
@@ -394,10 +428,19 @@ Markdown 風の散文として書く。bullet (`- foo`) と `**強調**` は HTM
    python3 scripts/grill_pending.py <out_dir>    # 未反映が無ければ exit 0・何も出さない。あれば exit 1 で一覧
    ```
    通知で起きて未反映が 0 件なら（処理済みの回答に対する遅れた通知）、チャットにも何も書かずにターンを終える
-2. **先に質問の列を補充する**（回答者は待たずに次へ進んでいるので、列を空にしないことが最優先）。反映済みで全員が答えた質問は列から外し、深掘りがあれば先頭に、足りなければ独立した質問を後ろに足す
-3. 回答を解釈して DML を dmlctl で更新（build + validate は自動）。`hint: true` の回答は ①会話プロトコルの `？` シグナルとして扱い、DML は変えずに `hint` を付けた質問を新しい qid で列の先頭に出し直す
-4. `eventstorming_build.py <dml> --artifact` → 同じファイルパスで `Artifact` 再公開（開いている画面のモデル部分が更新される。質問エリアの入力途中の内容は保たれる）
-5. 反映した qid を `grill/progress.reflected` に `summary` つきで書く（ヒント要求の qid も、応答したら書く）。`at` は**反映した時刻**（回答の `at` 以降）にする。2 と 5 は `batch` で 1 回にまとめてよい
+2. **先に質問の列を補充する**（回答者は待たずに次へ進んでいるので、列を空にしないことが最優先）。**列を手で書き直さず `grill_queue.py` を使う**（`ArtifactData` で `grill/current` も同じ out_dir に保存してから）:
+   ```sh
+   python3 scripts/grill_queue.py <out_dir> --prune [--front '<深掘りの質問 JSON>'] [--add '<独立した質問 JSON>'] > <out_dir>/queue.json
+   ```
+   `--prune` は反映済みの質問を外す。qid の再利用・選択肢の数・label の記号を検査し、違反があれば出力しない。列の書き込みは 5 の反映の記録と同じ `batch` で行う（列が空になりそうなら、ここで先に `batch` してよい）
+3. **未反映の回答を、まとめて解釈して DML を更新する**（回答 1 件ごとに 3〜5 を回さない。回答は 20〜60 秒おきに届き、1 件ずつでは常に遅れる）。dmlctl の書き込みは最後の 1 回以外 `--no-postprocess` でつなぐ。`hint: true` の回答は ①会話プロトコルの `？` シグナルとして扱い、DML は変えずに `hint` を付けた質問を新しい qid で列の先頭に出し直す
+4. `eventstorming_build.py <dml> --artifact` → 同じファイルパスで `Artifact` 再公開を**まとめて 1 回**（開いている画面のモデル部分が更新される。質問エリアの入力途中の内容は保たれる）
+5. 反映の記録を `grill_reflect.py` で組み立て、出力の `writes` を `ArtifactData` の `batch` にそのまま渡す。**時刻は手で書かない**（実時計で付き、回答より前・未来の時刻は作らない。手書きの未来の時刻は、後の選び直しを `grill_pending.py` から隠す）:
+   ```sh
+   python3 scripts/grill_reflect.py <out_dir> --entry 'q-…-04=「直前だけ確認」→ 未確認事項に記録' --entry 'q-…-05=…' \
+       [--decisions D7] --queue-op <out_dir>/queue.json
+   ```
+   ヒント要求の qid も、応答したら記録する
 6. **コメントへの返信は、確認の質問を出したとき（食い違い・選び直しの影響が大きいとき）だけ**。通常の反映は反映エリアの `summary` で伝わるので返信しない（毎回返すとスレッドが「返信待ち」の印で埋まるだけで、読み手の役に立たない）
 7. **ターンを終える前に、必ず 1 の `grill_pending.py` をもう一度回す**。exit 1 なら 1 に戻る（パネルは連続回答の通知を 1 回にまとめるので、後から届いた分は通知されないことがある。ここを抜かすと、パネルが「反映中」のまま回り続ける）
 8. チャットには②のチャット出力フォーマットで差分を短く残す
@@ -405,10 +448,10 @@ Markdown 風の散文として書く。bullet (`- foo`) と `**強調**` は HTM
 **選び直された回答を反映するとき**（パネルの「これまでの回答」から選び直すと、反映済みの qid に新しい回答が `rev`（版）と `prev`（前の回答）つきで届く）:
 
 1. 該当する `decisions[]` を探す（`affects[]` と `options` のラベルが手がかり）
-2. 採用案が変わるなら `chosen` と `adopted` を付け替える。前の採用案には `why_not` に「回答の選び直しで不採用（前→後）」と書く。**decision を消さない**（理由の履歴が残らなくなる）
+2. 採用案が変わるなら `dmlctl decision <file> --id=<D#> --choose=<option名>` で付け替える（`chosen` と `adopted` を付け替え、前の採用案の `why_not` に「回答の選び直しで不採用（前→後）」と当初の採用理由を残す）。**decision を消さない**（理由の履歴が残らなくなる）
 3. 前の回答から派生したシナリオ・ルール・ポリシー・ラベルを `dmlctl refs` で洗い出して直す
 4. 後続の決定が前の回答に依存していたら、**黙って書き換えず、確認の質問を列の先頭に出す**（「食い違ったら」の規則と同じ）。シナリオを複数消すなど変更が大きいときは、先に `summary` に「この選び直しで変わるもの」を書き、確認を取ってから反映する
-5. `grill/progress.reflected[qid]` を `{"at": <反映時刻>, "summary": "選び直しを反映: 〇〇 → △△"}` で上書きする（差分を `summary` に残すのが、反映を取り消したくなったときの最低限の手がかり）
+5. `grill_reflect.py <out_dir> --entry '<qid>=選び直しを反映: 〇〇 → △△'` で `grill/progress.reflected[qid]` を上書きする（差分を `summary` に残すのが、反映を取り消したくなったときの最低限の手がかり）
 
 選び直しは同じ回答者の更新なので最新を採る。別の回答者が同じ qid に違う答えをしていたら、従来どおり食い違いとして扱う。
 
@@ -447,8 +490,11 @@ Markdown 風の散文として書く。bullet (`- foo`) と `**強調**` は HTM
 | `references/quality-check.md` | 品質チェック（構造→意味の 2 段階・Agent 起動テンプレ・因果チェックサブセット） |
 | `references/checks/*.md` | 意味チェック 6 観点（scenario-rules-quality / saga-completeness / bc-vocabulary-consistency / agg-purpose-quality / causal-chain-completeness / decision-rationale-clarity） |
 | `scripts/dmlctl.py` | DML 観点別 I/O CLI（view/set/add/remove/check） |
-| `scripts/grill_pending.py` | Artifact グリルの未反映の回答（選び直しを含む）を一覧する。`ArtifactData` の `out_dir` に保存した answers / grill/progress を読む |
-| `requirements.txt` | Python 依存（pyyaml / jsonschema / ruamel.yaml）。SessionStart フックが自動で入れる |
+| `scripts/grill_pending.py` | Artifact グリルの未反映の回答（選び直しを含む）を一覧する。`ArtifactData` の `out_dir` に保存した answers / grill/progress を読む。未来の時刻の反映の記録を警告する |
+| `scripts/grill_queue.py` | 質問の列（`grill/current`）の追加・削除・掃除を、検査つきの `batch` 用 set 操作にする |
+| `scripts/grill_reflect.py` | 反映の記録（`grill/progress`）を実時計の時刻で組み立てる（`--queue-op` で列の書き込みと 1 つの `batch` に） |
+| `scripts/dml_to_quint.py` | `invariants[]` / `requires` を Quint に変換してモデル検査する（`dmlctl quint` から呼ぶ。`--backend` は自動で切り替わる） |
+| `requirements.txt` | Python 依存（pyyaml / jsonschema / ruamel.yaml）。SessionStart フックが自動で入れる（`quint` CLI も） |
 | `scripts/dml_filters/*.py` | view と check の Python 実装 |
 | `references/chat-output-format.md` | チャット出力テンプレート完全版 |
 | `templates/event-flow.html` | HTML 出力の汎用テンプレート |

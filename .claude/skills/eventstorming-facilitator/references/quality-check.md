@@ -3,7 +3,7 @@
 各チェックが根拠にする**モデリングルールの正典は [`ddd-playbook.md`](./ddd-playbook.md)**（DDD 概念軸）。
 本書は「どの観点を構造/意味のどちらで検証するか」のカタログで、ルールそのものは playbook §各概念「検証観点」を参照。
 
-DML 品質チェックは **2 段階**で行う：
+DML 品質チェックは **2 段階**で行い、`invariants[]` があれば間に **モデル検査（Quint）** を挟む（§標準フロー）：
 
 1. **構造チェック（Python のみ）** — `dmlctl check <file> --all` で全観点を一括判定（参照整合性・
    命名・到達可能性）。個別に見るときは `--check=<name>`。LLM は使わない。
@@ -54,6 +54,7 @@ DML 品質チェックは **2 段階**で行う：
 | `next_bypasses_policy` | POLICY が起動する CMD のシナリオへ、その POLICY の trg を発行しないシナリオから `next` で直結（warn） | trg を発行するシナリオを間に挟む。人が起動する経路なら actor の違うシナリオに分ける（playbook §6） |
 | `policy_scenario_overlap` | POLICY とシナリオで同じ CMD の evt / agg が食い違う／副作用専用 POLICY の evt をシナリオも発行（warn） | 中身を揃えるか、どちらか一方に寄せる（playbook §6） |
 | `phase_drift` | `session.phase` が中身から見た進み具合より遅れている（warn） | `dmlctl advance <file> --phase=<v>` |
+| `phase_outputs_missing` | 完了したフェーズの散文の書き漏れ。フェーズ 4.5 以降で `contexts[].description` が空／フェーズ 7 で `actions[]` が 0 件（warn） | 領域の説明・次のアクションを書く |
 
 **severity**: 各 finding は `severity`（`error` / `warn`）を持つ。`warn` は報告のみで終了コードに影響しない（意図的な書き方と区別できない可能性があるため）。
 `cmd` が `transitions[].via` に無いことは検査しない（playbook の「AGG 生成・同一状態内の属性変更は transitions に書かない」規約で正当に起こるため）。集約間の状態前提・非同期挙動は構造チェックの対象外（モデル検査の領分）。
@@ -89,11 +90,39 @@ exit code は `severity: error` が 0 件＝0、1 件以上＝1（`warn` のみ�
 
 ---
 
+## いつ、どの観点を回すか
+
+意味チェックをフェーズ 7 にまとめると、流れや用語の誤りが最後まで残り、直すときに手戻りが大きい（元の振り返り: 代替の流れの誤りと用語の割れ 17 件が、フェーズ 7 で初めて見つかった）。観点ごとに、材料が揃った時点で回す。
+
+| 時点 | 構造チェック | モデル検査 | 意味チェック |
+|---|---|---|---|
+| フェーズ 3 の後 | `--all` | — | `bc-vocabulary-consistency`（用語の割れ） |
+| フェーズ 4 の後 | `--all`（`alt_flow_takes_default_branch` を含む） | — | `causal-chain-completeness`（流れのつながり） |
+| フェーズ 4.6 の後 | `--all` | — | `agg-purpose-quality`（集約の目的） |
+| フェーズ 5 の後 | `--all`（`rules_without_invariants` を含む） | `invariants[]` があれば `dmlctl quint --run` | `scenario-rules-quality` |
+| フェーズ 7 | `--all` | `dmlctl quint --run`（必須。`invariants[]` が 0 件なら、その事実を報告する） | 6 観点すべてをもう一度 |
+
+## 報告の文言（「緑」をモデルの正しさの証拠にしない）
+
+進み具合の報告に、構造チェックの「エラー 0 件」を単独で使わない。何を検査して、何を検査していないかを並べて書く。
+
+```
+構造チェック: エラー 0・警告 2（意図どおり 2）
+モデル検査: ランダム検査 6000 通りで違反なし（保証ではない。回数の上限・属性の決まり・同じ集約が複数並ぶ場合は対象外）
+意味チェック: 6 観点、要修正 3 件を反映済み
+```
+
+`invariants[]` が 0 件のときは「モデル検査: 対象の性質なし（集約をまたぐ決まりは検査されていない）」と書く。
+
 ## 標準フロー（書き出し後に必ず実行）
 
 1. **構造チェック** — `dmlctl check <file> --all`。違反があれば `dmlctl set/add/remove` で修正して
    再走（意味チェックの誤判定ノイズを防ぐため、0 件にしてから次へ）
-2. **意味チェック** — 観点ごとに Agent を 1 件ずつ起動。入力は **view スライス + 当該 .md の指示**：
+2. **モデル検査**（`invariants[]` があるとき。フェーズ 7 では必須）— `dmlctl quint <file> --run`。
+   反例（`[violation]`）が出たら、その手順を業務の言葉に直してユーザーに見せ、モデルの穴か検査の近似か
+   を確かめる。評価器を取得できない環境では自動で typescript に切り替わる（`--backend`）。
+   `quint` が無ければ `npm i -g @informalsystems/quint`（SessionStart フックが入れている）
+3. **意味チェック** — 観点ごとに Agent を 1 件ずつ起動。入力は **view スライス + 当該 .md の指示**：
 
 ```
 Agent(
@@ -118,7 +147,7 @@ Agent(
 **6 件すべての完了通知を受け取ってから**所見を集計する。通知が来ないまま次のユーザー入力に
 答えるときは「意味チェックは実行中」とだけ伝え、所見を推測で書かない。
 
-3. **所見への対応**：
+4. **所見への対応**：
    - `verdict: ok` / `complete` / `clear` — 何もしない
    - `needs-revision` / `gap` / `vague` — 該当 DML 要素を `dmlctl set/add/remove` で修正
    - `critical` / `broken` / `incomplete` — チャットにホットスポット候補として列挙し、ユーザーに 1 問 1 答で確認

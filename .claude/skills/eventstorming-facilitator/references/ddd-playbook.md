@@ -100,9 +100,27 @@ DML（Domain Modeling Language）に関するルールは 3 つの真実源に�
   判別のコツ: (1) 業務関係者（PO / 主催者 / 法務）が想定するエラーか → YES なら書く。(2) 実装エンジニアがコードレビューで指摘するエラーか → YES なら書かない。(3) 同事象でも業務語彙に寄せられるなら寄せる（NG: `err: TooEarlyForNoShow, when: スケジューラ誤発火` → OK: `err: NoShowDetectionTooEarly, when: 早期判定試行（遅刻者の余裕未確保）`）。
 - **`rules[]`/`errs[]` は全 scenario 義務ではない**: goal に直結し業務価値を持つ scenario に絞る。単純な CRUD・導線・通知だけの scenario は空でよい。`dmlctl view --view=coverage` の「未記入」は**意図的に許容した箇所**と**未着手**を区別して読む（残欠そのものはバグではない）。迷ったら「この不変条件が破れると業務が困るか？」を基準にする。
 
+### 決まりの振り分け（どこに書くか）
+
+決まりは書く場所で「検査されるかどうか」が変わる。`rules[]` は自然文で、構造チェックも Quint も読まない。**検査したい決まりは、検査が読める形で書く。**
+
+| 決まりの形 | 書く場所 | 検査 |
+|---|---|---|
+| 複数の集約の状態の関係（「答え待ちの相談があるあいだは、計画書を提出できない」） | **`invariants[]`**（`kind: safety` の `never`）と、その操作の **`requires`**（`scenarios[]` / `policies[]`） | Quint（`dmlctl quint --run`） |
+| 「いずれ〜になる」（「条件の期限が過ぎたら、いずれ承認は取り消される」） | `invariants[]` の `kind: liveness`（`when` → `eventually`）。**使いどころは下記** | Quint |
+| 1 つの集約の中の状態の決まり（「却下された計画書は承認されない」） | `aggregates[].transitions[]`（その遷移を書かない）／`terminalStates` | 構造チェック・Quint |
+| 属性・回数・権限・金額の決まり（「直しは 5 回まで」「承認者は役員」） | `scenarios[].rules[]`（＋破ったときの `errs[]`） | **検査されない**（意味チェックが文面を読むだけ） |
+
+- **`rules` に他の集約の状態が出てきたら、`requires` を対で書く**。例: 提出のシナリオに `rule: NoSubmitWhileConsultationPending` を書いたら、同じシナリオに `requires: [{agg: Consultation, in: [ANSWERED, NONE]}]` も書く（`NONE` は「その集約がまだ作られていない」。相談が 1 件も無い計画書も提出できる、を表す）。`rules` は理由の説明として残してよい
+  - 注意: Quint の変換は、集約に `from: NONE` の遷移（生成）が書かれているときだけ初期状態を `NONE` にする。書かれていないと「最初から states 先頭の状態で存在する」と見なされ、`NONE` を前提にした `requires` は成り立たない。§8 の「生成は `transitions[]` に書かない」規約との整理は未決（改善計画 `docs/skill-improvements/20261128-invariants-flows-and-grill-tooling-plan.md` の判断 1）。それまでは、`NONE` を使う集約にだけ生成の遷移を書き、`note` に「検査のため」と添える
+- **`requires` は「実行してよい前提」、`invariants[]` は「どんな順序で何が起きても成り立つ性質」**。両方書くと、前提の書き漏れ（`requires` を付け忘れた別の経路）が Quint の反例として出る
+- **liveness の使いどころ**: 検査は「仕組みの側の動き（配送・自動処理）が尽きた状態で `when` が成り立つなら `eventually` も成り立つ」を見る。だから **自動処理が最後まで運ぶ性質にだけ書く**。次の一手が人の操作である性質（「経営会議に上がれば、いずれ結論が出る」）は、人が動かないかぎり必ず違反になるので書かない。保証したいなら、期限と自動処理（「期限が来たら催促する／自動で差し戻す」）を足し、その自動処理が運ぶ性質として書く
+- **Quint で表せないもの**: 回数の上限、属性の値の決まり、同じ集約が複数並ぶ場合（各集約 1 インスタンスで近似する）。これらは `rules[]` に書き、「検査の対象外」として報告する（`references/quality-check.md` §報告の文言）
+
 ### 検証観点
 
-- 構造: `err_name_quality`（数字入りコード風 / 1 語の汎用語を検出）。
+- 構造: `err_name_quality`（数字入りコード風 / 1 語の汎用語を検出）、`invariant_refs`（invariants[] / requires の参照）、`rules_without_invariants`（rules はあるのに invariants[] と requires が 0 件・warn）。
+- モデル検査: `dmlctl quint <file> --run`（`invariants[]` を Quint でランダム検査。違反が出ないことは保証ではない）。
 - 意味: [`checks/scenario-rules-quality.md`](./checks/scenario-rules-quality.md)（rule=不変条件か・err=業務エラーか・why/when 補強）。
 
 ---
@@ -419,10 +437,38 @@ DML（Domain Modeling Language）に関するルールは 3 つの真実源に�
 - 同一 `ctx` の連続 sync ステップはビルダーが 1 レーンに併合。`ctx` 変化・policy ステップ・`trgs` join は非同期矢印・sync-bar として描画。
 - **複数 `narratives[].entry` が同一 scenario を指す場合**は当該 scenario の `next` を dict 形式 `{happy: ..., alt-X: ...}` にしてフロー別の継続先を分岐させる。
 - policy ステップはビルダーが `scenarios[].evt → policies[].trg` マッチで**自動挿入**する（手書きの記号 DSL は無い）。
+- **分岐での流れの選ばれ方**: 分岐（`brs[]`）のあるシナリオでは、その流れ用の終わりの宣言（`terminal: <この流れの id>`）がある分岐、無ければ `terminal` を持たない最初の分岐（既定の分岐）が選ばれる。**`brs[].next` を書いただけの分岐は、代替の流れからも選ばれない**。
+
+### 代替の流れ（`kind: alt`）の書き方
+
+代替の流れは、題名の出来事（「条件つき承認」「満席でキャンセル待ち」）を通らなければ意味がない。上の選ばれ方のため、`entry` を分岐の手前に置くと、既定の分岐（メインと同じ道）が描かれ、題名の出来事が図から消える。次のどれかで書く。
+
+| 流れの形 | 書き方 |
+|---|---|
+| 分岐の先で続く（条件つき承認 → 条件を確かめる → …） | **`entry` を分岐の先のシナリオに置く**（`brs[].next` が指すシナリオ）。分岐の手前はメインの流れの図で見える |
+| 分岐で終わる（却下で終わる） | その分岐に `terminal: <この流れの id>`。`entry` はメインと同じ起点でよい |
+| 同じシナリオから流れごとに行き先が違う | そのシナリオの `next` を dict（`{happy: …, alt-x: …}`）にする |
+
+```yaml
+# NG: entry が分岐の手前。alt-conditional は既定の分岐（PlanApproved）を通り、メインと同じ図になる
+narratives:
+  - { id: alt-conditional, kind: alt, entry: 起案者が提出する }
+# OK: entry を分岐の先に置く
+narratives:
+  - { id: alt-conditional, kind: alt, entry: 担当の承認者が条件を満たしたか確かめる }
+scenarios:
+  - name: 経営会議が最終判断する
+    brs:
+      - { cond: 承認, evt: PlanApproved }
+      - { cond: 条件つき承認, evt: PlanConditionallyApproved, next: 担当の承認者が条件を満たしたか確かめる }
+      - { cond: 却下, evt: PlanRejected, terminal: alt-rejected }
+```
+
+- **差し戻し（ループ）の流れの限界**: 「差し戻し → 直す → 再提出 → 承認」のように、分岐の先がメインの流れの途中に戻る場合、`entry` を分岐の先に置いてもメインの道の上なので、差し戻しの分岐そのもの（`PlanReturned`）は図に出ない。いまの DML には「この流れでは、この分岐を選んで先へ続く」を書く手段が無い（今後の課題）。当面は散文（`prose`）に差し戻しの経緯を書き、`alt_flow_takes_default_branch` の警告は意図どおりとして読み流す
 
 ### 検証観点
 
-- 構造: `flow_chain_resolution`（entry/next/terminal の解決）、`narrative_entry_consistency`（共有 entry で next が dict 分岐していない）、`narrative_happy_unique`（happy が 2 件以上）、`alt_narrative_entry`（entry の無い代替 narrative・warn）、`unreachable_scenario`（どの entry からも next / brs[].next / policy で辿れないシナリオ・warn。独立した操作なら、それを entry にした `kind: alt` の narrative を足す）。
+- 構造: `alt_flow_takes_default_branch`（代替の流れが既定の分岐だけをたどっている・warn）、`flow_chain_resolution`（entry/next/terminal の解決）、`narrative_entry_consistency`（共有 entry で next が dict 分岐していない）、`narrative_happy_unique`（happy が 2 件以上）、`alt_narrative_entry`（entry の無い代替 narrative・warn）、`unreachable_scenario`（どの entry からも next / brs[].next / policy で辿れないシナリオ・warn。独立した操作なら、それを entry にした `kind: alt` の narrative を足す）。
 - 意味: [`checks/causal-chain-completeness.md`](./checks/causal-chain-completeness.md)、[`checks/saga-completeness.md`](./checks/saga-completeness.md)。
 
 ---
@@ -433,8 +479,9 @@ DML（Domain Modeling Language）に関するルールは 3 つの真実源に�
 |------|------|------|
 | **JSON Schema**（機械・決定論的） | 構文 validity。型・必須・enum・命名 pattern・排他制約・未知フィールド禁止（全量は [`dml.schema.yaml`](./dml.schema.yaml)） | `cmd` が PascalCase か、`bulk:true` に `qry` があるか |
 | **構造チェック**（Python・LLM 不要） | 参照実在・命名・到達可能性（観点一覧は [`quality-check.md`](./quality-check.md)、実体は [`checks.py`](../scripts/dml_filters/checks.py)） | `trg` が実在 EVT を指すか、`scenarios[].cmd` ↔ `transitions[].via` |
+| **モデル検査**（Quint・ランダム検査） | 集約をまたぐ性質（`invariants[]`）が、配送の順序の揺れ・自動処理の連鎖・メッセージの拒否を含めて成り立つか（§3 決まりの振り分け） | 「答え待ちの相談があるのに提出できる」経路が無いか |
 | **意味チェック**（観点別 LLM） | 因果整合・モデル品質（6 観点は [`checks/*.md`](./checks/)） | 分岐の MECE 性、業務語彙の適切さ、Saga 完結性 |
 
-**スキーマ通過は必要条件であって十分条件ではない。** ビルダー（`eventstorming_build.py`）は読込時に schema 検証し HTML §9 にバナー（✅ / ⚠ 違反一覧）を描画する。検証は**非ブロッキング**（違反があっても HTML は生成される）。全行コメントのみ（YAML→`None`）や空ファイルは「未記述」として検証対象外（進行中セッション許容）。
+**スキーマ通過は必要条件であって十分条件ではない。** 構造チェックの「エラー 0 件」も同じで、参照の整合と命名しか見ていない。流れが言いたいことを言っているか、決まりが実際に効いているかは、モデル検査と意味チェックの領分。 ビルダー（`eventstorming_build.py`）は読込時に schema 検証し HTML §9 にバナー（✅ / ⚠ 違反一覧）を描画する。検証は**非ブロッキング**（違反があっても HTML は生成される）。全行コメントのみ（YAML→`None`）や空ファイルは「未記述」として検証対象外（進行中セッション許容）。
 
 書き出し後の標準フロー・Agent 起動テンプレは [`quality-check.md`](./quality-check.md) を参照。

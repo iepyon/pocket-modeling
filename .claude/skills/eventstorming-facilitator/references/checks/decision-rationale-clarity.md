@@ -36,6 +36,10 @@ python3 scripts/dmlctl.py view <session>.dml.yaml --view=decisions
    別 decision が決着させている）。残っていれば `field: note` で指摘する
 8. **`decided_by: ai-default` / `ai-persona`** の decision は、本人未確認であることを前提に読む。
    why に「本人の選択」と読める書き方があれば `vague` で指摘する
+9. **採用案の why が、その option の label の言い換えだけになっていないか**（例: label「経営会議で決める」に
+   why「経営会議で決めるため」）。回答者が理由を言っていないのに、進行役が選択肢の補足文から理由を作った
+   形跡なので `vague` とし、「why を空にするか『回答者の選択（理由は未聴取）』にとどめ、見直す価値がある
+   決定なら理由を一言聞く」と suggestion する。`why` が空、または「理由は未聴取」と明記された採用案は指摘しない
 
 入力 (YAML):
 {{decisions_yaml}}

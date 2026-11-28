@@ -32,7 +32,12 @@ import dml_to_quint  # noqa: E402
 import grill_pending  # noqa: E402
 import grill_queue  # noqa: E402
 import grill_reflect  # noqa: E402
-from dml_filters.checks import CHECKS, alt_flow_takes_default_branch, rules_without_invariants  # noqa: E402
+from dml_filters.checks import (  # noqa: E402
+    CHECKS,
+    alt_flow_takes_default_branch,
+    phase_outputs_missing,
+    rules_without_invariants,
+)
 from dml_filters.refs import apply_rename, collect_refs  # noqa: E402
 
 DMLCTL = SCRIPTS / "dmlctl.py"
@@ -118,6 +123,15 @@ class TestRulesWithoutInvariants(unittest.TestCase):
         m = self._model()
         m["aggregates"] = m["aggregates"][:1]
         self.assertEqual(rules_without_invariants(m), [])
+
+
+class TestPhaseOutputsMissing(unittest.TestCase):
+    def test_description_and_actions(self):
+        m = {"session": {"phase": "7"}, "contexts": [{"name": "a", "description": "x"}, {"name": "b"}]}
+        paths = [f.path for f in phase_outputs_missing(m)]
+        self.assertEqual(paths, ["contexts[1].description", "actions"])
+        m["session"]["phase"] = "4"
+        self.assertEqual(phase_outputs_missing(m), [])
 
 
 class TestRenameAffects(unittest.TestCase):

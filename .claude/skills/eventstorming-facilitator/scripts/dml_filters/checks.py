@@ -1891,6 +1891,34 @@ def phase_drift(model: dict) -> list[Finding]:
     )]
 
 
+def phase_outputs_missing(model: dict) -> list[Finding]:
+    """完了したフェーズで書くはずの散文が空のものを警告する。
+
+    - フェーズ 4.5 以降: `contexts[].description`（領域の説明）が空の BC
+    - フェーズ 7: `actions[]`（次のアクション）が 0 件
+    質問パネル中心の進行では、フェーズ完了のテンプレを出さないので書き漏れやすい。"""
+    session = model.get("session") if isinstance(model.get("session"), dict) else {}
+    phase = str(session.get("phase")) if session.get("phase") is not None else None
+    if phase not in PHASES:
+        return []
+    findings: list[Finding] = []
+    if PHASES.index(phase) >= PHASES.index("4.5"):
+        for i, c in enumerate(model.get("contexts") or []):
+            if isinstance(c, dict) and not str(c.get("description") or "").strip():
+                findings.append(Finding(
+                    kind="phase_outputs_missing", severity="warn", path=f"contexts[{i}].description",
+                    message=f"領域 '{c.get('name')}' の説明（description）が空です（フェーズ 4 で境界の理由・目的を書く）",
+                    slice={"ctx": c.get("name")},
+                ))
+    if phase == "7" and not model.get("actions"):
+        findings.append(Finding(
+            kind="phase_outputs_missing", severity="warn", path="actions",
+            message="フェーズ 7 まで進んでいますが、次のアクション（actions[]）が 0 件です",
+            slice={},
+        ))
+    return findings
+
+
 CHECKS: dict[str, Callable[[dict], list[Finding]]] = {
     "orphan_agg": orphan_agg,
     "dangling_cmd": dangling_cmd,
@@ -1926,4 +1954,5 @@ CHECKS: dict[str, Callable[[dict], list[Finding]]] = {
     "next_bypasses_policy": next_bypasses_policy,
     "policy_scenario_overlap": policy_scenario_overlap,
     "phase_drift": phase_drift,
+    "phase_outputs_missing": phase_outputs_missing,
 }
