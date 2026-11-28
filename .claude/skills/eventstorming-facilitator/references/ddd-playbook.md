@@ -202,11 +202,12 @@ DML（Domain Modeling Language）に関するルールは 3 つの真実源に�
 
   合わせて `policies[...].note` に「`EventAlreadyCancelled` ガードで連鎖発火を防いでいる」と明記するとレビュー時に relation を辿りやすい。
 
-- **自動で起動する CMD は POLICY だけに書く（`next` で直結しない・二重に宣言しない）**: 「在庫が減ったら焙煎する」のように、ある EVT を受けて自動で起動する CMD は `policies[].cmd` に書き、その CMD を実行する SCENARIO へは**別の SCENARIO の `next` から直接つながない**。`next` で直結すると、図の上では「入荷したらそのまま焙煎」という手順の連続に見え、「在庫が閾値を下回ったら」という起動条件（POLICY の意味）が消える。また、同じ CMD を「POLICY の `cmd`」と「別アクターが起動する SCENARIO」の両方で宣言しない。人が起動する経路と自動の経路が本当に両方あるなら、SCENARIO を 2 本に分け `actor` で区別する（例: `マスターが焙煎を指示する` / `システムが焙煎を予約する`）。副作用専用 POLICY（`cmd` 無し）と同じ通知を SCENARIO にも書くのも同じ重複になる。どちらかに寄せる: 内部 AGG を変えないなら POLICY だけ、変えるなら SCENARIO を書き POLICY は `cmd` でそれを指す。
+- **POLICY が起動する CMD のシナリオへ `next` でつなぐのは、前のシナリオがその POLICY の `trg` を発行するときだけ**: ビルダーは「前のシナリオの evt → その evt を `trg` に持つ POLICY を挿入 → `next` で POLICY の CMD を実行するシナリオへ」とフローを描く（POLICY の `cmd` 付箋は後続シナリオと重複するので描かない）。前のシナリオが `trg` を発行していないのに `next` でつなぐと、図の上では手順の直結に見え、「在庫が閾値を下回ったら焙煎する」という起動条件が消える（例: 入荷の `next` が焙煎に直結）。この場合は、`trg` を発行するシナリオ（例: `システムが在庫の減少を検知する`）を間に挟む。人が直接起動する経路も本当にあるなら、`actor` の違うシナリオに分ける（例: `マスターが焙煎を指示する` / `焙煎ロボットが生豆を焙煎する`）。構造チェック `next_bypasses_policy` が警告する。
+- **POLICY とシナリオで同じ動きを書くときは中身を揃える**: POLICY の `cmd` と同じ `cmd` のシナリオがあるなら、POLICY の `evt` / `agg` はそのシナリオの `evt` / `agg` と一致させる。`cmd` を持たない副作用専用 POLICY（通知など）の `evt` を、別のシナリオにも発行させない（同じ通知の二重記述）。内部の集約を変えないなら POLICY だけに、変えるならシナリオを書いて POLICY は `cmd` でそれを指す。構造チェック `policy_scenario_overlap` が警告する。
 
 ### 検証観点
 
-- 構造: `unknown_evt_in_policy`（trg/trgs の実在）、`dangling_cmd`（policies[].cmd）、`policy_cmd_direct_next`（POLICY の CMD を別シナリオの `next` で直結）、`cmd_dual_declaration`（同じ CMD をポリシーとシナリオで二重宣言）。
+- 構造: `unknown_evt_in_policy`（trg/trgs の実在）、`dangling_cmd`（policies[].cmd）、`next_bypasses_policy`（`trg` を発行しないシナリオから POLICY の CMD へ `next` で直結）、`policy_scenario_overlap`（POLICY とシナリオで同じ動きの中身が食い違う・副作用の二重記述）。
 - 意味: [`checks/saga-completeness.md`](./checks/saga-completeness.md)（Saga 完結性・POLICY オーバーラップ・補償 TX・OR の妥当性）。
 
 ---
@@ -421,7 +422,7 @@ DML（Domain Modeling Language）に関するルールは 3 つの真実源に�
 
 ### 検証観点
 
-- 構造: `flow_chain_resolution`（entry/next/terminal の解決）、`narrative_entry_consistency`（共有 entry で next が dict 分岐していない）、`narrative_happy_unique`（happy が 2 件以上）。
+- 構造: `flow_chain_resolution`（entry/next/terminal の解決）、`narrative_entry_consistency`（共有 entry で next が dict 分岐していない）、`narrative_happy_unique`（happy が 2 件以上）、`alt_narrative_entry`（entry の無い代替 narrative・warn）、`unreachable_scenario`（どの entry からも next / brs[].next / policy で辿れないシナリオ・warn。独立した操作なら、それを entry にした `kind: alt` の narrative を足す）。
 - 意味: [`checks/causal-chain-completeness.md`](./checks/causal-chain-completeness.md)、[`checks/saga-completeness.md`](./checks/saga-completeness.md)。
 
 ---

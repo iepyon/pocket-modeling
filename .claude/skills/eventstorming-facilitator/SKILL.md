@@ -255,7 +255,7 @@ DML は **`docs/eventstorming/<session>.dml.yaml`** 1 ファイルに **YAML 直
 - **`decisions[]` はフェーズを問わず随時 add する**: フェーズ 1〜5 の途中で決まった選択（イベントを畳む／分ける、境界の引き方、精算の形など）はその場で記録する。フェーズ 6 は棚卸し専用。
 - **`aggregates[]`/`policies[]` を足したら lang にも同時登録**: 所属 BC の `contexts[].lang.aggs`／`lang.pols` にも英→日ラベルを同時登録する（`contexts[].aggs` の軽量名簿とは別物）。集約の `states` も `lang.states` に同時登録する（`CANCELLED` のような状態名は BC をまたいで重なりやすく、`cross_bc_state_name_collision` が警告する。ラベルで区別できる）。漏れは `dmlctl check --check=language_coverage` が検出する。
 - **集約の `events[]` はシナリオから補える**: シナリオの `evt` が集約の `events[]` に無いと `scenario_agg_consistency` が指摘する。手で数えず `dmlctl derive-agg-events <file> --agg=<Name> [--dry-run]` で不足分を足す（`params` は空で入るので、フェーズ 5 で埋める）。
-- **同じ CMD をポリシーとシナリオの両方で宣言しない**: 他の EVT を受けて自動で起動する CMD は `policies[].cmd` だけに書く。別シナリオの `next` から直接その CMD のシナリオへつなぐと、「〜したら〜する」という自動起動の意図が消える（`policy_cmd_direct_next` / `cmd_dual_declaration` が警告。詳細: playbook §6）。
+- **POLICY が起動する CMD へ `next` でつなぐのは、前のシナリオがその POLICY の `trg` を発行するときだけ**: ビルダーは「前の evt → POLICY → `next` のシナリオ」と描くので、`trg` を発行しないシナリオから直結すると「〜が起きたら〜する」という起動条件が図から消える。間に `trg` を発行するシナリオを挟むか、人が起動する経路なら `actor` の違うシナリオに分ける。POLICY とシナリオで同じ CMD を書くなら `evt` / `agg` を揃える（`next_bypasses_policy` / `policy_scenario_overlap` が警告。詳細: playbook §6）。
 
 **書き出し後の品質チェック（必須）**: 詳細は `references/quality-check.md`。
 
@@ -265,7 +265,7 @@ DML は **`docs/eventstorming/<session>.dml.yaml`** 1 ファイルに **YAML 直
 **途中保存と再開**: フェーズ完了ごとに `dmlctl advance <file> [--status='Phase 4.6 完了']` で
 `session.phase` を前進させる（enum 検証つき。status も同時更新可）。action の完了は
 `dmlctl action <file> --id=A1`。再開時は `dmlctl view --view=session-meta` でフェーズを確認し、
-`--view=coverage` で書き漏れ（rules/errs/attrs/params 等の未記入要素）を俯瞰してから続きに入る。
+`--view=coverage` で書き漏れ（rules/errs/attrs/params 等の未記入要素）を俯瞰してから続きに入る。`session.phase` の前進を忘れると、`dmlctl check --all` の `phase_drift` が「中身から見たフェーズ」とのずれを警告する。
 
 ### DML トップレベル構成
 
@@ -441,6 +441,8 @@ Markdown 風の散文として書く。bullet (`- foo`) と `**強調**` は HTM
 | `references/quality-check.md` | 品質チェック（構造→意味の 2 段階・Agent 起動テンプレ・因果チェックサブセット） |
 | `references/checks/*.md` | 意味チェック 6 観点（scenario-rules-quality / saga-completeness / bc-vocabulary-consistency / agg-purpose-quality / causal-chain-completeness / decision-rationale-clarity） |
 | `scripts/dmlctl.py` | DML 観点別 I/O CLI（view/set/add/remove/check） |
+| `scripts/grill_pending.py` | Artifact グリルの未反映の回答（選び直しを含む）を一覧する。`ArtifactData` の `out_dir` に保存した answers / grill/progress を読む |
+| `requirements.txt` | Python 依存（pyyaml / jsonschema / ruamel.yaml）。SessionStart フックが自動で入れる |
 | `scripts/dml_filters/*.py` | view と check の Python 実装 |
 | `references/chat-output-format.md` | チャット出力テンプレート完全版 |
 | `templates/event-flow.html` | HTML 出力の汎用テンプレート |

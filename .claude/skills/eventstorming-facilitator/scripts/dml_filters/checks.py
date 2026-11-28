@@ -240,6 +240,24 @@ def language_coverage(model: dict) -> list[Finding]:
     _check(model.get("scenarios") or [], lambda x: x.get("cmd"), "CMD", "scenarios")
     _check(model.get("scenarios") or [], lambda x: x.get("evt"), "EVT", "scenarios")
     _check(model.get("policies") or [], lambda x: x.get("name"), "POL", "policies")
+    # 担い手（actor）はフロー図のレーン見出しに出る。既存 DML への影響を抑えるため warn にとどめる。
+    seen_actors: set[str] = set()
+    for i, sc in enumerate(model.get("scenarios") or []):
+        if not isinstance(sc, dict):
+            continue
+        actor = sc.get("actor")
+        if not isinstance(actor, str) or not actor or actor in registered or actor in seen_actors:
+            continue
+        seen_actors.add(actor)
+        findings.append(
+            Finding(
+                kind="language_coverage",
+                path=f"scenarios[{i}].actor",
+                message=f"ACTOR '{actor}' が contexts[].lang.actors に未登録",
+                slice={"identifier": actor, "kind": "ACTOR"},
+                severity="warn",
+            )
+        )
     return findings
 
 
@@ -1493,6 +1511,258 @@ def invariant_refs(model: dict) -> list[Finding]:
     return findings
 
 
+# ============================================================
+# フロー到達性・ポリシーとの整合・進行状況（2026-11 追加。すべて warn）
+# ============================================================
+
+
+def _next_targets(sc: dict) -> list[tuple[list[str], str]]:
+    """scenario から `next` / `brs[].next` で進む先を `(その経路で発火する evt 群, 先の scenario 名)` で返す。"""
+    out: list[tuple[list[str], str]] = []
+    nxt = sc.get("next")
+    evts = scenario_evts(sc)
+    if isinstance(nxt, str) and nxt:
+        out.append((evts, nxt))
+    elif isinstance(nxt, dict):
+        for v in nxt.values():
+            if isinstance(v, str) and v:
+                out.append((evts, v))
+    for br in sc.get("brs") or []:
+        if isinstance(br, dict) and br.get("next"):
+            out.append(([br["evt"]] if br.get("evt") else [], br["next"]))
+    return out
+
+
+def _policy_cmds_triggered_by(model: dict, evts: list[str]) -> set[str]:
+    """evts から（policy.evt の連鎖も辿って）起動される policies[].cmd の集合。"""
+    pols = [p for p in model.get("policies") or [] if isinstance(p, dict)]
+    out: set[str] = set()
+    seen: set[str] = set()
+    frontier = [e for e in evts if e]
+    while frontier:
+        ev = frontier.pop()
+        if ev in seen:
+            continue
+        seen.add(ev)
+        for p in pols:
+            trgs, _mode = policy_triggers(p)
+            if ev not in trgs:
+                continue
+            if p.get("cmd"):
+                out.add(p["cmd"])
+            if p.get("evt"):
+                frontier.append(p["evt"])
+    return out
+
+
+def alt_narrative_entry(model: dict) -> list[Finding]:
+    """`kind: alt` の narrative に `entry` が無いものを警告する。
+
+    entry が無い代替シナリオは散文だけになり、フロー図に展開されない（どのシナリオが
+    代替の流れに属するかが構造に残らない）。フェーズ 2〜3 の散文だけの段階で騒がないよう、
+    フロー連鎖を書き始めた（いずれかの narrative に entry がある）DML だけを対象にする。"""
+    narratives = [n for n in model.get("narratives") or [] if isinstance(n, dict)]
+    if not any(n.get("entry") for n in narratives):
+        return []
+    findings: list[Finding] = []
+    for i, n in enumerate(model.get("narratives") or []):
+        if not isinstance(n, dict) or n.get("kind") != "alt" or n.get("entry"):
+            continue
+        findings.append(Finding(
+            kind="alt_narrative_entry",
+            severity="warn",
+            path=f"narratives[{i}].entry",
+            message=f"代替シナリオ '{n.get('id') or n.get('title') or i}' に entry がありません（フロー図に展開されません）",
+            slice={"id": n.get("id"), "title": n.get("title")},
+        ))
+    return findings
+
+
+def unreachable_scenario(model: dict) -> list[Finding]:
+    """どの narrative の entry からも辿れないシナリオを警告する。
+
+    辿り方: entry → `next` / `brs[].next` → 発火した evt を trg に持つ policy の cmd を実行する
+    scenario（policy.evt の連鎖も辿る）。フロー連鎖を書き始めた DML だけを対象にする。
+    孤立したシナリオはフロー図に出ず、因果の意味チェックからも漏れる。"""
+    scenarios = [s for s in model.get("scenarios") or [] if isinstance(s, dict) and s.get("name")]
+    entries = [n.get("entry") for n in model.get("narratives") or [] if isinstance(n, dict) and n.get("entry")]
+    if not entries or not scenarios:
+        return []
+    by_name = {s["name"]: s for s in scenarios}
+    by_cmd: dict[str, list[str]] = {}
+    for s in scenarios:
+        if s.get("cmd"):
+            by_cmd.setdefault(s["cmd"], []).append(s["name"])
+    reached: set[str] = set()
+    frontier = [e for e in entries if e in by_name]
+    while frontier:
+        name = frontier.pop()
+        if name in reached:
+            continue
+        reached.add(name)
+        sc = by_name[name]
+        for _evts, target in _next_targets(sc):
+            if target in by_name and target not in reached:
+                frontier.append(target)
+        for cmd in _policy_cmds_triggered_by(model, scenario_evts(sc)):
+            for target in by_cmd.get(cmd, []):
+                if target not in reached:
+                    frontier.append(target)
+    findings: list[Finding] = []
+    for i, s in enumerate(model.get("scenarios") or []):
+        if not isinstance(s, dict) or not s.get("name") or s["name"] in reached:
+            continue
+        findings.append(Finding(
+            kind="unreachable_scenario",
+            severity="warn",
+            path=f"scenarios[{i}]",
+            message=(
+                f"シナリオ '{s['name']}' はどの narrative の entry からも辿れません"
+                "（next / brs[].next / policy でつなぐか、代替シナリオの entry にする）"
+            ),
+            slice={"scenario": s["name"], "ctx": s.get("ctx")},
+        ))
+    return findings
+
+
+def next_bypasses_policy(model: dict) -> list[Finding]:
+    """POLICY が起動する CMD のシナリオへ、そのポリシーの trg を発行しないシナリオから `next` でつないでいるものを警告する。
+
+    ビルダーは「前のシナリオの evt → policy を挿入 → next で policy の CMD を実行するシナリオへ」と描く。
+    前のシナリオが trg を発行していないのに next でつなぐと、図の上では手順の直結に見え、
+    「〜が起きたら〜する」という起動条件（例: 在庫が減ったら焙煎）が消える。
+    人が直接起動する経路も本当にあるなら、actor の違うシナリオに分ける（playbook §6）。"""
+    policy_cmds = {
+        p["cmd"] for p in model.get("policies") or [] if isinstance(p, dict) and p.get("cmd")
+    }
+    if not policy_cmds:
+        return []
+    by_name = {
+        s["name"]: s for s in model.get("scenarios") or [] if isinstance(s, dict) and s.get("name")
+    }
+    findings: list[Finding] = []
+    for i, sc in enumerate(model.get("scenarios") or []):
+        if not isinstance(sc, dict):
+            continue
+        reported: set[str] = set()
+        for evts, target in _next_targets(sc):
+            tgt = by_name.get(target)
+            if not tgt or target in reported:
+                continue
+            cmd = tgt.get("cmd")
+            if cmd not in policy_cmds or cmd in _policy_cmds_triggered_by(model, evts):
+                continue
+            reported.add(target)
+            pols = [
+                p.get("name") for p in model.get("policies") or []
+                if isinstance(p, dict) and p.get("cmd") == cmd
+            ]
+            findings.append(Finding(
+                kind="next_bypasses_policy",
+                severity="warn",
+                path=f"scenarios[{i}].next",
+                message=(
+                    f"'{sc.get('name')}' から next で '{target}'（{cmd}）へ直結していますが、{cmd} は"
+                    f" POLICY {', '.join(p for p in pols if p)} が起動します。前のシナリオはその起動イベントを発行していません"
+                ),
+                slice={"from": sc.get("name"), "to": target, "cmd": cmd, "policies": pols, "evts": evts},
+            ))
+    return findings
+
+
+def policy_scenario_overlap(model: dict) -> list[Finding]:
+    """同じ動きを POLICY とシナリオの両方で宣言し、中身が食い違っているものを警告する。
+
+    - policy.cmd と同じ cmd のシナリオがあるのに、policy.evt がそのシナリオの evt に無い
+    - policy.cmd と同じ cmd のシナリオの agg と policy.agg が違う
+    - cmd を持たない副作用専用 POLICY の evt を、シナリオも発行している（同じ通知を二重に書いている）"""
+    scenarios = [s for s in model.get("scenarios") or [] if isinstance(s, dict)]
+    findings: list[Finding] = []
+    for i, p in enumerate(model.get("policies") or []):
+        if not isinstance(p, dict):
+            continue
+        name = p.get("name") or f"#{i}"
+        cmd = p.get("cmd")
+        if cmd:
+            same = [s for s in scenarios if s.get("cmd") == cmd]
+            if not same:
+                continue
+            evts = {e for s in same for e in scenario_evts(s)}
+            if p.get("evt") and p["evt"] not in evts:
+                findings.append(Finding(
+                    kind="policy_scenario_overlap", severity="warn", path=f"policies[{i}].evt",
+                    message=f"POLICY '{name}' の evt '{p['evt']}' が、{cmd} のシナリオの evt（{', '.join(sorted(evts)) or 'なし'}）と食い違います",
+                    slice={"policy": name, "cmd": cmd, "policy_evt": p["evt"], "scenario_evts": sorted(evts)},
+                ))
+            aggs = {s.get("agg") for s in same if s.get("agg")}
+            if p.get("agg") and aggs and p["agg"] not in aggs:
+                findings.append(Finding(
+                    kind="policy_scenario_overlap", severity="warn", path=f"policies[{i}].agg",
+                    message=f"POLICY '{name}' の agg '{p['agg']}' が、{cmd} のシナリオの agg（{', '.join(sorted(aggs))}）と食い違います",
+                    slice={"policy": name, "cmd": cmd, "policy_agg": p["agg"], "scenario_aggs": sorted(aggs)},
+                ))
+        elif p.get("evt"):
+            emitters = [s.get("name") for s in scenarios if p["evt"] in scenario_evts(s)]
+            if emitters:
+                findings.append(Finding(
+                    kind="policy_scenario_overlap", severity="warn", path=f"policies[{i}]",
+                    message=(
+                        f"副作用専用 POLICY '{name}' の evt '{p['evt']}' を、シナリオ {', '.join(emitters)} も発行しています。"
+                        "内部の集約を変えないなら POLICY だけに、変えるならシナリオを書いて POLICY に cmd を付ける"
+                    ),
+                    slice={"policy": name, "evt": p["evt"], "scenarios": emitters},
+                ))
+    return findings
+
+
+_PHASE_ORDER = ["1", "2", "3", "4", "4.5", "4.6", "5", "6", "7"]
+
+
+def _content_phase(model: dict) -> tuple[str, str] | None:
+    """DML の中身から「少なくともここまでは完了している」フェーズと、その根拠を返す。"""
+    aggs = [a for a in model.get("aggregates") or [] if isinstance(a, dict)]
+    scenarios = [s for s in model.get("scenarios") or [] if isinstance(s, dict)]
+    if any(a.get("transitions") or a.get("attrs") for a in aggs) or any(
+        s.get("rules") or s.get("errs") for s in scenarios
+    ):
+        return "4.6", "遷移・属性・ルール・エラーが書かれている（フェーズ 5 に入っている）"
+    if aggs:
+        return "4.5", "集約が書かれている（フェーズ 4.6 に入っている）"
+    if model.get("policies") or any(
+        isinstance(n, dict) and n.get("entry") for n in model.get("narratives") or []
+    ):
+        return "3", "ポリシーかフロー連鎖（entry）が書かれている（フェーズ 4 に入っている）"
+    if scenarios:
+        return "2", "シナリオが書かれている（フェーズ 3 に入っている）"
+    if model.get("narratives"):
+        return "1", "ストーリーの散文が書かれている（フェーズ 2 に入っている）"
+    return None
+
+
+def phase_drift(model: dict) -> list[Finding]:
+    """`session.phase`（直近完了フェーズ）が、DML の中身から見た進み具合より遅れていたら警告する。
+
+    phase は `dmlctl advance` を手で回さないと進まず、HTML の進捗表示と再開時の判断がずれる。"""
+    inferred = _content_phase(model)
+    if not inferred:
+        return []
+    want, reason = inferred
+    session = model.get("session") if isinstance(model.get("session"), dict) else {}
+    have = str(session.get("phase")) if session.get("phase") is not None else None
+    if have in _PHASE_ORDER and _PHASE_ORDER.index(have) >= _PHASE_ORDER.index(want):
+        return []
+    return [Finding(
+        kind="phase_drift",
+        severity="warn",
+        path="session.phase",
+        message=(
+            f"session.phase が '{have or '未設定'}' ですが、中身から見ると少なくともフェーズ {want} は完了しています"
+            f"（{reason}）。dmlctl advance <file> --phase={want} で進めてください"
+        ),
+        slice={"phase": have, "inferred_at_least": want},
+    )]
+
+
 CHECKS: dict[str, Callable[[dict], list[Finding]]] = {
     "orphan_agg": orphan_agg,
     "dangling_cmd": dangling_cmd,
@@ -1520,4 +1790,9 @@ CHECKS: dict[str, Callable[[dict], list[Finding]]] = {
     "policy_cycle": policy_cycle,
     "state_dead_end": state_dead_end,
     "invariant_refs": invariant_refs,
+    "alt_narrative_entry": alt_narrative_entry,
+    "unreachable_scenario": unreachable_scenario,
+    "next_bypasses_policy": next_bypasses_policy,
+    "policy_scenario_overlap": policy_scenario_overlap,
+    "phase_drift": phase_drift,
 }

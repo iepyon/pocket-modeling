@@ -52,6 +52,10 @@ DML ファイルへの **唯一の I/O 経路** になる。
     dmlctl action <file> --id=<id> [--not-done]
         actions[].done を id 指定でトグルする糖衣（既定は done: true）。
 
+    dmlctl derive-agg-events <file> [--agg=<Name>] [--dry-run]
+        scenarios[].agg / policies[].agg が指す集約の events[] に、シナリオ・ポリシーの
+        evt（brs[].evt を含む）のうち未宣言のものを {name} だけで足す（params は後で埋める）。
+
     dmlctl check <file> (--check=<name> | --all)
         構造チェック観点を実行し、違反を JSON で stdout に出力する。
 
@@ -246,8 +250,24 @@ def _resolve_list(data, path: str) -> list:
 
 
 def _parse_value(text: str):
-    """`--value` に渡された YAML リテラルを Python 値に変換する。"""
-    return yaml.safe_load(text)
+    """`--value` に渡された YAML リテラルを Python 値に変換する。
+
+    YAML として読めない値（先頭が `**強調**` や `- ` の散文、` : ` を含む長文など）は
+    スタックトレースではなく、`--value-file`（生テキスト扱い）への案内つきで終了する。"""
+    try:
+        return yaml.safe_load(text)
+    except yaml.YAMLError as e:
+        head = text.strip().splitlines()[0][:40] if text.strip() else ""
+        mark = getattr(e, "problem_mark", None)
+        where = f"（{mark.line + 1} 行 {mark.column + 1} 文字目）" if mark else ""
+        problem = getattr(e, "problem", None) or str(e).splitlines()[0]
+        raise SystemExit(
+            f"❌ 値を YAML として読めません{where}: {problem}\n"
+            f"   値の先頭: {head!r}\n"
+            "   散文（先頭が `**` `- ` `*` `&` `!` `|` `>` の文、` : ` や `#` を含む長文）は YAML として誤読されます。\n"
+            "   → set / update なら `--value-file=<path>` を使ってください（中身を生テキストとして扱います）。\n"
+            "   → 短い値なら全体をクォートで囲んでください（例: --value='\"**境界の理由**: …\"'）。"
+        ) from None
 
 
 def _deep_merge(dst, patch: dict) -> None:
@@ -401,6 +421,31 @@ def _run_postprocess(path: Path) -> None:
             )
     except FileNotFoundError:
         print(f"⚠ validate スクリプトが見つかりません: {VALIDATE_SCRIPT}", file=sys.stderr)
+    _warn_language_coverage(path)
+
+
+def _warn_language_coverage(path: Path, limit: int = 5) -> None:
+    """日本語ラベルの登録漏れ（language_coverage）を警告として出す。終了コードには影響しない。
+
+    schema 検証だけだとラベル抜けが `check --all` まで表に出ず、HTML が英語の識別子のまま
+    になっていることに気づけないため、書き込みのたびに件数だけ知らせる。"""
+    try:
+        model = load_model(path)
+    except Exception:  # noqa: BLE001 — 壊れた YAML は validate 側が報告済み
+        return
+    if not isinstance(model, dict):
+        return
+    findings = CHECKS["language_coverage"](model)
+    if not findings:
+        return
+    print(
+        f"⚠ 日本語ラベル未登録 {len(findings)} 件（contexts[].lang）— HTML では英語の識別子のまま表示されます",
+        file=sys.stderr,
+    )
+    for f in findings[:limit]:
+        print(f"   - {f.message}", file=sys.stderr)
+    if len(findings) > limit:
+        print(f"   …ほか {len(findings) - limit} 件（dmlctl check <file> --check=language_coverage）", file=sys.stderr)
 
 
 # ============================================================
@@ -538,6 +583,27 @@ def _toplevel_keys() -> list[str]:
         return fallback
 
 
+def _warn_undeclared_ctx(data, item: dict) -> None:
+    """scenarios に足す要素の ctx が contexts[] に宣言されていなければ警告する（書き込みは止めない）。
+
+    日本語ラベルの置き場 `contexts[].lang` は BC の下にあるため、BC が無いとラベルを
+    登録できず、HTML のフロー図が英語の識別子のまま出る。"""
+    ctx = item.get("ctx")
+    if not ctx:
+        return
+    declared = {
+        c.get("name") for c in (data.get("contexts") or []) if isinstance(c, dict)
+    }
+    if ctx in declared:
+        return
+    print(
+        f"⚠ ctx '{ctx}' は contexts[] に宣言されていません。日本語ラベル（contexts[].lang）の置き場がなく、\n"
+        f"   HTML のフロー図が英語の識別子のまま表示されます。仮の BC を先に作ってください:\n"
+        f"   dmlctl add <file> --to=contexts --item='{{name: {ctx}, label_ja: <日本語名>}}'",
+        file=sys.stderr,
+    )
+
+
 def cmd_add(args) -> int:
     yml, path, data = _load_doc(args.file)
     if data is None:
@@ -590,9 +656,11 @@ def cmd_add(args) -> int:
         return 2
     if args.item_file is not None:
         text = Path(args.item_file).read_text(encoding="utf-8")
-        item = yaml.safe_load(text)
+        item = _parse_value(text)
     else:
         item = _parse_value(args.item)
+    if len(segments) == 1 and last == "scenarios" and isinstance(item, dict):
+        _warn_undeclared_ctx(data, item)
     target.append(item)
     print(f"✅ {args.to} に 1 件追加しました（計 {len(target)} 件）", file=sys.stderr)
     return _save(path, yml, data, args)
@@ -808,6 +876,60 @@ def cmd_advance(args) -> int:
     rc = _save(path, yml, data, args)
     print(f"✅ session.phase: {current or '(未設定)'} → {target}", file=sys.stderr)
     return rc
+
+
+def cmd_derive_agg_events(args) -> int:
+    """集約に紐づくシナリオ／ポリシーの evt から、aggregates[].events[] の不足分を足す。
+
+    対象は `scenarios[].agg == <name>` のシナリオの evt と brs[].evt、および
+    `policies[].agg == <name>` のポリシーの evt（出現順・重複なし）。既存の events[] は
+    触らず、無いものだけ `{name: <Evt>}` で末尾に足す（params はフェーズ 5 で埋める）。"""
+    from dml_filters.shared import scenario_evts
+
+    yml, path, data = _load_doc(args.file)
+    if not isinstance(data, dict):
+        print("❌ DML が空です", file=sys.stderr)
+        return 2
+    targets = [
+        a for a in (data.get("aggregates") or [])
+        if isinstance(a, dict) and (args.agg is None or a.get("name") == args.agg)
+    ]
+    if args.agg and not targets:
+        print(f"❌ aggregates[] に '{args.agg}' がありません", file=sys.stderr)
+        return 2
+    from ruamel.yaml.comments import CommentedMap, CommentedSeq  # type: ignore
+
+    total = 0
+    for agg in targets:
+        name = agg.get("name")
+        wanted: list[str] = []
+        for sc in data.get("scenarios") or []:
+            if isinstance(sc, dict) and sc.get("agg") == name:
+                for ev in scenario_evts(sc):
+                    if ev not in wanted:
+                        wanted.append(ev)
+        for pol in data.get("policies") or []:
+            if isinstance(pol, dict) and pol.get("agg") == name and pol.get("evt"):
+                if pol["evt"] not in wanted:
+                    wanted.append(pol["evt"])
+        existing = {
+            e.get("name") for e in (agg.get("events") or []) if isinstance(e, dict)
+        }
+        missing = [ev for ev in wanted if ev not in existing]
+        if not missing:
+            continue
+        if agg.get("events") is None:
+            agg["events"] = CommentedSeq()
+        for ev in missing:
+            m = CommentedMap()
+            m["name"] = ev
+            agg["events"].append(m)
+        total += len(missing)
+        print(f"✅ {name}.events に {len(missing)} 件追加: {', '.join(missing)}", file=sys.stderr)
+    if total == 0:
+        print("✅ 不足する events[] はありません（変更なし）", file=sys.stderr)
+        return 0
+    return _save(path, yml, data, args)
 
 
 def cmd_action(args) -> int:
@@ -1094,6 +1216,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_action.add_argument("--not-done", action="store_true", help="done: false に戻す")
     _add_write_flags(p_action)
     p_action.set_defaults(func=cmd_action)
+
+    p_derive = sub.add_parser(
+        "derive-agg-events",
+        help="シナリオ／ポリシーの evt から aggregates[].events[] の不足分を足す",
+    )
+    p_derive.add_argument("file")
+    p_derive.add_argument("--agg", help="対象の AGG 名（省略時は全集約）")
+    _add_write_flags(p_derive)
+    p_derive.set_defaults(func=cmd_derive_agg_events)
 
     p_hint = sub.add_parser("hint", help="パスの期待型を schema から提示する（書き込み前の型確認）")
     p_hint.add_argument("--path", required=True, help="例: queries.users / scenarios[].brs[].pol / session.phase")
