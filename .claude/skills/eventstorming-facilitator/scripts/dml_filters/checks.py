@@ -12,8 +12,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from .flow_walk import index_policies_by_trg
 from .shared import INITIAL_STATE as INITIAL_PSEUDO_STATE
-from .shared import policy_triggers, scenario_evts
+from .shared import PHASES, policy_triggers, scenario_evts
 from .shared import to_list as _to_list
 
 
@@ -218,46 +219,43 @@ def language_coverage(model: dict) -> list[Finding]:
                 registered.update(cat_dict.keys())
 
     findings: list[Finding] = []
+    reported: set[str] = set()  # warn は同じ識別子を 1 回だけ報告する
 
-    def _check(items: list, getter, kind_label: str, path_prefix: str) -> None:
+    def _check(items: list, getter, kind_label: str, path_prefix: str,
+               *, severity: str = "error", suffix: str = "") -> None:
         for i, it in enumerate(items or []):
             if not isinstance(it, dict):
                 continue
-            name = getter(it)
-            if not name:
-                continue
-            if name not in registered:
+            names = getter(it)
+            for name in names if isinstance(names, list) else [names]:
+                if not isinstance(name, str) or not name or name in registered:
+                    continue
+                if severity == "warn":
+                    if name in reported:
+                        continue
+                    reported.add(name)
                 findings.append(
                     Finding(
                         kind="language_coverage",
-                        path=f"{path_prefix}[{i}]",
+                        path=f"{path_prefix}[{i}]{suffix}",
                         message=f"{kind_label} '{name}' が contexts[].lang に未登録",
                         slice={"identifier": name, "kind": kind_label},
+                        severity=severity,
                     )
                 )
 
+    scenarios = model.get("scenarios") or []
+    policies = model.get("policies") or []
     _check(model.get("aggregates") or [], lambda x: x.get("name"), "AGG", "aggregates")
-    _check(model.get("scenarios") or [], lambda x: x.get("cmd"), "CMD", "scenarios")
-    _check(model.get("scenarios") or [], lambda x: x.get("evt"), "EVT", "scenarios")
-    _check(model.get("policies") or [], lambda x: x.get("name"), "POL", "policies")
-    # 担い手（actor）はフロー図のレーン見出しに出る。既存 DML への影響を抑えるため warn にとどめる。
-    seen_actors: set[str] = set()
-    for i, sc in enumerate(model.get("scenarios") or []):
-        if not isinstance(sc, dict):
-            continue
-        actor = sc.get("actor")
-        if not isinstance(actor, str) or not actor or actor in registered or actor in seen_actors:
-            continue
-        seen_actors.add(actor)
-        findings.append(
-            Finding(
-                kind="language_coverage",
-                path=f"scenarios[{i}].actor",
-                message=f"ACTOR '{actor}' が contexts[].lang.actors に未登録",
-                slice={"identifier": actor, "kind": "ACTOR"},
-                severity="warn",
-            )
-        )
+    _check(scenarios, lambda x: x.get("cmd"), "CMD", "scenarios")
+    _check(scenarios, lambda x: x.get("evt"), "EVT", "scenarios")
+    _check(policies, lambda x: x.get("name"), "POL", "policies")
+    # 以下はフロー図の付箋に出る識別子。既存 DML の終了コードを変えないよう warn にとどめる。
+    _check(scenarios, lambda x: x.get("actor"), "ACTOR", "scenarios", severity="warn", suffix=".actor")
+    _check(scenarios, lambda x: [b.get("evt") for b in x.get("brs") or [] if isinstance(b, dict)],
+           "EVT", "scenarios", severity="warn", suffix=".brs")
+    _check(scenarios, lambda x: _to_list(x.get("qry")), "QRY", "scenarios", severity="warn", suffix=".qry")
+    _check(policies, lambda x: [x.get("evt")] + _to_list(x.get("qry")), "EVT/QRY", "policies", severity="warn")
     return findings
 
 
@@ -1533,9 +1531,10 @@ def _next_targets(sc: dict) -> list[tuple[list[str], str]]:
     return out
 
 
-def _policy_cmds_triggered_by(model: dict, evts: list[str]) -> set[str]:
-    """evts から（policy.evt の連鎖も辿って）起動される policies[].cmd の集合。"""
-    pols = [p for p in model.get("policies") or [] if isinstance(p, dict)]
+def _policy_cmds_triggered_by(by_trg: dict[str, list[dict]], evts: list[str]) -> set[str]:
+    """evts から（policy.evt の連鎖も辿って）起動される policies[].cmd の集合。
+
+    `by_trg` は `index_policies_by_trg(model)`（EVT → POLICY の解釈の単一の定義元）。"""
     out: set[str] = set()
     seen: set[str] = set()
     frontier = [e for e in evts if e]
@@ -1544,15 +1543,39 @@ def _policy_cmds_triggered_by(model: dict, evts: list[str]) -> set[str]:
         if ev in seen:
             continue
         seen.add(ev)
-        for p in pols:
-            trgs, _mode = policy_triggers(p)
-            if ev not in trgs:
-                continue
+        for p in by_trg.get(ev, []):
             if p.get("cmd"):
                 out.add(p["cmd"])
             if p.get("evt"):
                 frontier.append(p["evt"])
     return out
+
+
+def undeclared_ctx(model: dict) -> list[Finding]:
+    """scenarios / policies / aggregates / queries の `ctx` が contexts[] に宣言されていないものを警告する。
+
+    日本語ラベルの置き場 `contexts[].lang` は BC の下にあるため、BC が無いとラベルを登録できず、
+    HTML のフロー図が英語の識別子のまま出る。フェーズ 3 の仮の ctx でも、BC は同じターンに作る。"""
+    declared = {c.get("name") for c in model.get("contexts") or [] if isinstance(c, dict)}
+    missing: dict[str, str] = {}  # ctx → 最初に使われたパス
+    for key in ("scenarios", "policies", "aggregates", "queries"):
+        for i, it in enumerate(model.get(key) or []):
+            ctx = it.get("ctx") if isinstance(it, dict) else None
+            if isinstance(ctx, str) and ctx and ctx not in declared:
+                missing.setdefault(ctx, f"{key}[{i}].ctx")
+    return [
+        Finding(
+            kind="undeclared_ctx",
+            severity="warn",
+            path=path,
+            message=(
+                f"ctx '{ctx}' は contexts[] に宣言されていません。仮の BC を作ってください: "
+                f"dmlctl add <file> --to=contexts --item='{{name: {ctx}, label_ja: <日本語名>}}'"
+            ),
+            slice={"ctx": ctx},
+        )
+        for ctx, path in missing.items()
+    ]
 
 
 def alt_narrative_entry(model: dict) -> list[Finding]:
@@ -1561,11 +1584,11 @@ def alt_narrative_entry(model: dict) -> list[Finding]:
     entry が無い代替シナリオは散文だけになり、フロー図に展開されない（どのシナリオが
     代替の流れに属するかが構造に残らない）。フェーズ 2〜3 の散文だけの段階で騒がないよう、
     フロー連鎖を書き始めた（いずれかの narrative に entry がある）DML だけを対象にする。"""
-    narratives = [n for n in model.get("narratives") or [] if isinstance(n, dict)]
-    if not any(n.get("entry") for n in narratives):
+    narratives = model.get("narratives") or []
+    if not any(isinstance(n, dict) and n.get("entry") for n in narratives):
         return []
     findings: list[Finding] = []
-    for i, n in enumerate(model.get("narratives") or []):
+    for i, n in enumerate(narratives):
         if not isinstance(n, dict) or n.get("kind") != "alt" or n.get("entry"):
             continue
         findings.append(Finding(
@@ -1593,6 +1616,7 @@ def unreachable_scenario(model: dict) -> list[Finding]:
     for s in scenarios:
         if s.get("cmd"):
             by_cmd.setdefault(s["cmd"], []).append(s["name"])
+    by_trg = index_policies_by_trg(model)
     reached: set[str] = set()
     frontier = [e for e in entries if e in by_name]
     while frontier:
@@ -1604,7 +1628,7 @@ def unreachable_scenario(model: dict) -> list[Finding]:
         for _evts, target in _next_targets(sc):
             if target in by_name and target not in reached:
                 frontier.append(target)
-        for cmd in _policy_cmds_triggered_by(model, scenario_evts(sc)):
+        for cmd in _policy_cmds_triggered_by(by_trg, scenario_evts(sc)):
             for target in by_cmd.get(cmd, []):
                 if target not in reached:
                     frontier.append(target)
@@ -1632,11 +1656,13 @@ def next_bypasses_policy(model: dict) -> list[Finding]:
     前のシナリオが trg を発行していないのに next でつなぐと、図の上では手順の直結に見え、
     「〜が起きたら〜する」という起動条件（例: 在庫が減ったら焙煎）が消える。
     人が直接起動する経路も本当にあるなら、actor の違うシナリオに分ける（playbook §6）。"""
-    policy_cmds = {
-        p["cmd"] for p in model.get("policies") or [] if isinstance(p, dict) and p.get("cmd")
-    }
-    if not policy_cmds:
+    pols_by_cmd: dict[str, list[str]] = {}
+    for p in model.get("policies") or []:
+        if isinstance(p, dict) and p.get("cmd"):
+            pols_by_cmd.setdefault(p["cmd"], []).append(p.get("name") or "?")
+    if not pols_by_cmd:
         return []
+    by_trg = index_policies_by_trg(model)
     by_name = {
         s["name"]: s for s in model.get("scenarios") or [] if isinstance(s, dict) and s.get("name")
     }
@@ -1650,20 +1676,17 @@ def next_bypasses_policy(model: dict) -> list[Finding]:
             if not tgt or target in reported:
                 continue
             cmd = tgt.get("cmd")
-            if cmd not in policy_cmds or cmd in _policy_cmds_triggered_by(model, evts):
+            if cmd not in pols_by_cmd or cmd in _policy_cmds_triggered_by(by_trg, evts):
                 continue
             reported.add(target)
-            pols = [
-                p.get("name") for p in model.get("policies") or []
-                if isinstance(p, dict) and p.get("cmd") == cmd
-            ]
+            pols = pols_by_cmd[cmd]
             findings.append(Finding(
                 kind="next_bypasses_policy",
                 severity="warn",
                 path=f"scenarios[{i}].next",
                 message=(
                     f"'{sc.get('name')}' から next で '{target}'（{cmd}）へ直結していますが、{cmd} は"
-                    f" POLICY {', '.join(p for p in pols if p)} が起動します。前のシナリオはその起動イベントを発行していません"
+                    f" POLICY {', '.join(pols)} が起動します。前のシナリオはその起動イベントを発行していません"
                 ),
                 slice={"from": sc.get("name"), "to": target, "cmd": cmd, "policies": pols, "evts": evts},
             ))
@@ -1715,9 +1738,6 @@ def policy_scenario_overlap(model: dict) -> list[Finding]:
     return findings
 
 
-_PHASE_ORDER = ["1", "2", "3", "4", "4.5", "4.6", "5", "6", "7"]
-
-
 def _content_phase(model: dict) -> tuple[str, str] | None:
     """DML の中身から「少なくともここまでは完了している」フェーズと、その根拠を返す。"""
     aggs = [a for a in model.get("aggregates") or [] if isinstance(a, dict)]
@@ -1749,7 +1769,7 @@ def phase_drift(model: dict) -> list[Finding]:
     want, reason = inferred
     session = model.get("session") if isinstance(model.get("session"), dict) else {}
     have = str(session.get("phase")) if session.get("phase") is not None else None
-    if have in _PHASE_ORDER and _PHASE_ORDER.index(have) >= _PHASE_ORDER.index(want):
+    if have in PHASES and PHASES.index(have) >= PHASES.index(want):
         return []
     return [Finding(
         kind="phase_drift",
@@ -1790,6 +1810,7 @@ CHECKS: dict[str, Callable[[dict], list[Finding]]] = {
     "policy_cycle": policy_cycle,
     "state_dead_end": state_dead_end,
     "invariant_refs": invariant_refs,
+    "undeclared_ctx": undeclared_ctx,
     "alt_narrative_entry": alt_narrative_entry,
     "unreachable_scenario": unreachable_scenario,
     "next_bypasses_policy": next_bypasses_policy,

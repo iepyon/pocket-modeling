@@ -23,7 +23,7 @@ DML 品質チェックは **2 段階**で行う：
 | `orphan_agg` | どの scenario からも参照されない AGG | scenarios[].agg を追記 / 不要なら AGG 削除 |
 | `dangling_cmd` | `aggregates[].transitions[].via` が scenarios[].cmd に未宣言 | scenarios を追加するか transitions を修正 |
 | `unknown_evt_in_policy` | `policies[].trg` / `policies[].trgs.evts` が aggregates[].events[].name に未宣言 | EVT 宣言を補強 |
-| `language_coverage` | AGG/CMD/EVT/POL が contexts[].lang に未登録（ACTOR の未登録は warn） | contexts[].lang に英→日辞書を追加。dmlctl の書き込みの後処理でも件数を警告する |
+| `language_coverage` | AGG/CMD/EVT/POL が contexts[].lang に未登録（フロー図の付箋に出る ACTOR・brs[].evt・qry・policies[].evt の未登録は warn）。HTML の「訳未登録」の印・上部の件数と同じ定義 | contexts[].lang に英→日辞書を追加。dmlctl の書き込みの後処理でも件数を警告する |
 | `state_reachability` | aggregates[].states に到達可能な transitions が無い状態（初期状態除く） | transitions を補強 |
 | `orphan_event` | EVT 宣言済みだが scenarios/policies のいずれからも参照されない | 削除 or 参照追加（意図的な終端 EVT は `events[].terminal: true` で除外） |
 | `flow_chain_resolution` | `narratives[].entry` / `scenarios[].next` / `brs[].terminal` の参照が解決できない | typo 修正・narratives[].id の存在確認 |
@@ -46,6 +46,7 @@ DML 品質チェックは **2 段階**で行う：
 | `policy_cycle` | EVT→POLICY→CMD→EVT の連鎖が閉路（warn） | 意図した再試行でなければ停止条件を設ける |
 | `invariant_refs` | invariants[] の agg が aggregates[] に無い／in の状態が agg.states に無い | 参照を修正 |
 | `state_dead_end` | 出る遷移が無く terminalStates にも無い状態（warn） | 終端なら `aggregates[].terminalStates` に宣言、でなければ遷移を追加 |
+| `undeclared_ctx` | scenarios / policies / aggregates / queries の `ctx` が contexts[] に宣言されていない（warn）。dmlctl の書き込みの後処理でも警告する | `dmlctl add <file> --to=contexts --item='{name: <ctx>, label_ja: <日本語名>}'` |
 | `alt_narrative_entry` | `kind: alt` の narrative に `entry` が無い（フロー連鎖を書き始めた DML のみ・warn） | 代替の流れの起点シナリオを `entry` に書く |
 | `unreachable_scenario` | どの narrative の entry からも `next` / `brs[].next` / policy で辿れないシナリオ（warn） | 連鎖でつなぐか、独立した操作なら、それを entry にした `kind: alt` の narrative を足す |
 | `next_bypasses_policy` | POLICY が起動する CMD のシナリオへ、その POLICY の trg を発行しないシナリオから `next` で直結（warn） | trg を発行するシナリオを間に挟む。人が起動する経路なら actor の違うシナリオに分ける（playbook §6） |

@@ -27,6 +27,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from dml_filters.checks import language_coverage
 from dml_filters.flow_walk import index_policies_by_trg, pick_active_branch
 
 try:
@@ -241,9 +242,14 @@ def localize(identifier: str, glossary_index: dict[str, str]) -> str:
     return glossary_index.get(identifier, identifier)
 
 
-def _untr(identifier, glossary_index: dict[str, str]) -> bool:
-    """識別子に日本語ラベルが無い（localize が英語のまま返す）か。付箋に「訳未登録」を出す判定。"""
-    return bool(identifier) and isinstance(identifier, str) and identifier not in glossary_index
+def _note(kind: str, identifier: str, glossary_index: dict[str, str], **kw) -> "Note":
+    """識別子から付箋を作る。日本語ラベルが無ければ英語のまま出し、`untranslated` を立てる。"""
+    return Note(
+        kind=kind,
+        label=localize(identifier, glossary_index),
+        untranslated=bool(identifier) and identifier not in glossary_index,
+        **kw,
+    )
 
 
 def _collect_pivotal_evts(model: dict) -> set[str]:
@@ -284,17 +290,17 @@ def _scenario_steps_to_notes(
     pivotal_evts = pivotal_evts or set()
 
     def _evt_note(ev: str) -> Note:
-        return Note(kind="event", label=localize(ev, gloss), untranslated=_untr(ev, gloss), is_pivotal=ev in pivotal_evts)
+        return _note("event", ev, gloss, is_pivotal=ev in pivotal_evts)
 
     notes: list[Note] = []
     actor = sc.get("actor") or ""
     if actor and not (SKIP_SYSTEM_ACTOR and actor == "System"):
-        notes.append(Note(kind="actor", label=localize(actor, gloss), untranslated=_untr(actor, gloss)))
+        notes.append(_note("actor", actor, gloss))
     for q in sc.get("qry") or []:
-        notes.append(Note(kind="readmodel", label=localize(q, gloss), untranslated=_untr(q, gloss)))
+        notes.append(_note("readmodel", q, gloss))
     cmd = sc.get("cmd")
     if cmd:
-        notes.append(Note(kind="command", label=localize(cmd, gloss), untranslated=_untr(cmd, gloss)))
+        notes.append(_note("command", cmd, gloss))
     if active_br is not None:
         # フロー別描画: アクティブな brs.evt のみ
         ev = active_br.get("evt")
@@ -332,13 +338,13 @@ def _policy_steps_to_notes(
     notes: list[Note] = []
     bulk = bool(pol.get("bulk"))
     pol_name = pol.get("name", "")
-    notes.append(Note(kind="policy", label=localize(pol_name, gloss), untranslated=_untr(pol_name, gloss)))
+    notes.append(_note("policy", pol_name, gloss))
     qry = pol.get("qry")
     if qry:
-        notes.append(Note(kind="readmodel", label=localize(qry, gloss), untranslated=_untr(qry, gloss)))
+        notes.append(_note("readmodel", qry, gloss))
     if pol.get("evt"):
         ev = pol["evt"]
-        n = Note(kind="event", label=localize(ev, gloss), untranslated=_untr(ev, gloss), is_pivotal=ev in pivotal_evts)
+        n = _note("event", ev, gloss, is_pivotal=ev in pivotal_evts)
         if bulk:
             n.is_fanout = True
         notes.append(n)
@@ -726,26 +732,6 @@ def render_narratives(narratives: list[dict]) -> str:
     return "\n  ".join(parts)
 
 
-# レーン見出しに併記する BC の日本語名（contexts[].label_ja）。render_flows が描画のあいだだけ設定する
-_LANE_LABELS: dict[str, str] = {}
-
-
-def bc_labels_from_dml(model: dict | None) -> dict[str, str]:
-    """`{BC 名: label_ja}`。label_ja の無い BC は含めない。"""
-    out: dict[str, str] = {}
-    for c in (model or {}).get("contexts") or []:
-        if isinstance(c, dict) and c.get("name") and c.get("label_ja"):
-            out[str(c["name"])] = str(c["label_ja"])
-    return out
-
-
-def _lane_label_html(bc: str) -> str:
-    ja = _LANE_LABELS.get(bc)
-    if not ja:
-        return esc(bc)
-    return f'{esc(ja)}<span class="lane-id">{esc(bc)}</span>'
-
-
 def render_flows(
     flows: list[Flow], provisional: bool = False, bc_labels: dict[str, str] | None = None
 ) -> str:
@@ -755,8 +741,6 @@ def render_flows(
     確定フローと見間違えないよう図の上に警告バッジを出す。
     `bc_labels` があれば、レーン見出しを「日本語名＋英語の BC 名」で出す。
     """
-    _LANE_LABELS.clear()
-    _LANE_LABELS.update(bc_labels or {})
     if not flows:
         return (
             '<div class="todo-placeholder">'
@@ -798,11 +782,11 @@ def render_flows(
             "</div>"
         )
     for flow in flows:
-        out_parts.append(render_flow(flow))
+        out_parts.append(render_flow(flow, bc_labels))
     return "\n  ".join(out_parts)
 
 
-def render_flow(flow: Flow) -> str:
+def render_flow(flow: Flow, bc_labels: dict[str, str] | None = None) -> str:
     """1 つの Flow を Big Picture グリッド HTML に変換。
 
     同じ Flow を 2 ビュー分レンダリングして DOM に両方残す:
@@ -816,9 +800,9 @@ def render_flow(flow: Flow) -> str:
     full_body = _render_flow_body(
         unique_bcs, bc_to_row, bc_to_color,
         _flow_notes_full(flow, bc_to_row),
-        "flow-view-full",
+        "flow-view-full", bc_labels,
     )
-    events_body = _render_flow_body_events(flow)
+    events_body = _render_flow_body_events(flow, bc_labels)
     return (
         f'<div class="flow">\n'
         f'    <div class="flow-title">{esc(flow.title)}</div>\n'
@@ -949,7 +933,7 @@ def _events_only_steps(flow: Flow) -> list[tuple[str, Note, bool, bool]]:
     return steps
 
 
-def _render_flow_body_events(flow: Flow) -> str:
+def _render_flow_body_events(flow: Flow, bc_labels: dict[str, str] | None = None) -> str:
     """EVT のみビュー（`.flow-view-events`）の `.flow-body` を組み立てる。
 
     連続 EVT 間の繋ぎは、間に非同期境界を挟むかで矢印を切替える:
@@ -999,8 +983,15 @@ def _render_flow_body_events(flow: Flow) -> str:
         f'<div class="end-spacer" style="grid-row: 1; grid-column: {col};"></div>'
     )
     return _render_flow_body(
-        unique_bcs, bc_to_row, bc_to_color, note_elements, "flow-view-events"
+        unique_bcs, bc_to_row, bc_to_color, note_elements, "flow-view-events", bc_labels
     )
+
+
+def _lane_label_html(bc: str, label_ja: str | None) -> str:
+    """レーン見出し。BC に日本語名があれば「日本語名＋英語の BC 名」で出す。"""
+    if not label_ja:
+        return esc(bc)
+    return f'{esc(label_ja)}<span class="lane-id">{esc(bc)}</span>'
 
 
 def _render_flow_body(
@@ -1009,12 +1000,13 @@ def _render_flow_body(
     bc_to_color: dict[str, str],
     note_elements: list[str],
     view_cls: str,
+    bc_labels: dict[str, str] | None = None,
 ) -> str:
     """レーンヘッダ + 横スクロールグリッドの `.flow-body` を組み立てる。"""
     # === 左カラム: レーンヘッダ(横スクロール対象外) ===
     lane_header_items = [
         f'<div class="lane-name {bc_to_color[bc]}" style="grid-row: {bc_to_row[bc]};">'
-        f"{_lane_label_html(bc)}</div>"
+        f"{_lane_label_html(bc, (bc_labels or {}).get(bc))}</div>"
         for bc in unique_bcs
     ]
     lane_header_html = "\n        ".join(lane_header_items)
@@ -1986,11 +1978,6 @@ def render_label_gaps(model: dict | None) -> str:
     しまうので、モデル側の不備（登録漏れ）であることをページ上で分かるようにする。"""
     if not isinstance(model, dict):
         return ""
-    try:
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
-        from dml_filters.checks import language_coverage
-    except Exception:  # noqa: BLE001 — チェック基盤が読めなくてもビルドは止めない
-        return ""
     names: list[str] = []
     for f in language_coverage(model):
         ident = (f.slice or {}).get("identifier")
@@ -2033,11 +2020,13 @@ def build_body_html(
     # フロー図ラベルや §6 意思決定ログの affects 表示で英語識別子を日本語に置換する。
     glossary_index = build_glossary_index_from_dml(doc.model)
 
+    bc_cards = bc_cards_from_dml(doc.model)
     decisions_html = ""
     if doc.model is not None:
         flows, flows_provisional = select_flows(doc.model, glossary_index)
         flows_html = render_flows(
-            flows, provisional=flows_provisional, bc_labels=bc_labels_from_dml(doc.model)
+            flows, provisional=flows_provisional,
+            bc_labels={c["slug"]: c["label_ja"] for c in bc_cards if c.get("label_ja")},
         )
         agg_cards_html = render_agg_cards_from_dml(doc.model, glossary_index)
         decisions_html = render_decisions(doc.model, glossary_index)
@@ -2051,7 +2040,6 @@ def build_body_html(
             '<div class="todo-placeholder">DML 解析不可 — §10 を参照</div>'
         )
 
-    bc_cards = bc_cards_from_dml(doc.model)
     context_map_html = render_context_map(bc_cards)
     bc_cards_html = render_bc_cards(bc_cards)
     qry_cards_html = render_qry_cards(doc.qrys)

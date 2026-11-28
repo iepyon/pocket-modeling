@@ -68,10 +68,9 @@ def _format_error(err) -> str:
         exp = err.validator_value
         exp = ", ".join(exp) if isinstance(exp, list) else exp
         hint = f"（期待: {exp} / 実際: {type(err.instance).__name__}）"
-        if exp == "object" and isinstance(err.instance, str) and (
-            "params" in err.absolute_path or "attrs" in err.absolute_path
-        ):
-            hint += f"（ヒント: 文字列ではなく {{name: {err.instance}, type: string}} の形で書く）"
+        # 名前つきの辞書（params / attrs / events / options …）の場所に、名前だけの文字列を渡した
+        if exp == "object" and isinstance(err.instance, str) and "name" in (err.schema.get("properties") or {}):
+            hint += f"（ヒント: 文字列ではなく {{name: {err.instance}}} で始まる辞書で書く）"
     elif err.validator == "required":
         missing = err.validator_value or []
         for prop in missing:

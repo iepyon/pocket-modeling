@@ -79,7 +79,7 @@ python3 .claude/skills/eventstorming-facilitator/scripts/eventstorming_build.py 
 | 空のモデルの案内 | `narratives` / `scenarios` / `contexts` / `aggregates` / `policies` / `decisions` がすべて空（`dmlctl init` 直後） | `render_empty_model()` → `.empty-model`（「質問に答えると、ここにモデルが育ちます」） |
 | 日本語ラベル未登録 | 構造チェック `language_coverage` の指摘（ACTOR の warn を含む）が 1 件以上 | `render_label_gaps()` → `.label-gaps`（件数と先頭 8 件の識別子） |
 
-ラベルの無い識別子は、フロー図の付箋（`Note.untranslated`）に `.untr`「訳未登録」の印が付く。レーン見出しは、BC に `label_ja` があれば「日本語名＋`.lane-id` の英語 BC 名」で出す（`bc_labels_from_dml()`）。
+ラベルの無い識別子は、フロー図の付箋（`_note()` が立てる `Note.untranslated`）に `.untr`「訳未登録」の印が付く。レーン見出しは、BC に `label_ja` があれば「日本語名＋`.lane-id` の英語 BC 名」で出す（`render_flows(..., bc_labels=)`。BC カードの `label_ja` から作る）。
 
 ---
 

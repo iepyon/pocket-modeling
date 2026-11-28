@@ -290,14 +290,11 @@ def _example(schema: dict, candidates: list[dict], path: str) -> str:
 # 型だけでは分からない「何を書くか」と、取り違えやすい値の正しい例。
 # キーは選択子を `[]` に正規化したパスの**末尾一致**（例 `transitions[].via` は
 # `aggregates[].transitions[].via` にも `aggregates[name=X].transitions[].via` にも当たる）。
+# 配列とその要素（`brs` と `brs[]`）は同じ注記を使うので、キーは末尾の `[]` なしで 1 つだけ書く。
 _PATH_NOTES: dict[str, dict[str, str]] = {
     "transitions[].via": {
         "meaning": "この遷移を起こすコマンド名（scenarios[].cmd / policies[].cmd の値）。イベント名ではない（イベント名を書くと dangling_cmd になる）",
         "correct": "via: ConfirmOrder   # ✕ via: OrderConfirmed",
-    },
-    "transitions[]": {
-        "meaning": "from の状態から to の状態へ、via のコマンドで移る。生成（最初の状態）は書かない",
-        "correct": "add --to='aggregates[name=Order].transitions' --item='{from: PLACED, to: CONFIRMED, via: ConfirmOrder}'",
     },
     "transitions": {
         "meaning": "状態遷移の配列。各要素の via はコマンド名",
@@ -307,10 +304,6 @@ _PATH_NOTES: dict[str, dict[str, str]] = {
         "meaning": "イベントのペイロード属性。要素は文字列ではなく {name, type, required, note} の辞書",
         "correct": "params: [{name: orderId, type: string, required: true}]   # ✕ params: [orderId]",
     },
-    "events[]": {
-        "meaning": "この集約が発行するイベント。シナリオの evt から不足分を足すなら dmlctl derive-agg-events",
-        "correct": "add --to='aggregates[name=Order].events' --item='{name: OrderPlaced, params: [{name: orderId, type: string}]}'",
-    },
     "events": {
         "meaning": "この集約が発行するイベントの配列。シナリオの evt から不足分を足すなら dmlctl derive-agg-events",
         "correct": "add --to='aggregates[name=Order].events' --item='{name: OrderPlaced, params: [{name: orderId, type: string}]}'",
@@ -319,13 +312,9 @@ _PATH_NOTES: dict[str, dict[str, str]] = {
         "meaning": "集約の属性。要素は {name, type, required, note} の辞書（文字列の配列ではない）",
         "correct": "attrs: [{name: orderId, type: string, required: true}]",
     },
-    "brs[]": {
+    "brs": {
         "meaning": "同じトランザクション内の分岐。cond が成り立てば evt が起きる。next（その分岐の続き）と terminal（その分岐でフローが終わる narratives[].id）はどちらか一方だけ",
         "correct": "{cond: 在庫あり, evt: StockReserved, next: システムが出荷を手配する}  /  {cond: 在庫なし, evt: StockShortage, terminal: alt-shortage}",
-    },
-    "brs": {
-        "meaning": "同じトランザクション内の分岐の配列。各要素の next と terminal はどちらか一方だけ",
-        "correct": "brs: [{cond: 在庫あり, evt: StockReserved}, {cond: 在庫なし, evt: StockShortage, terminal: alt-shortage}]",
     },
     "brs[].terminal": {
         "meaning": "この分岐が起きたらフローが終わる narratives[].id（next と同時には書けない）",
@@ -362,13 +351,17 @@ _PATH_NOTES: dict[str, dict[str, str]] = {
 }
 
 
-def _path_note(path: str) -> dict[str, str] | None:
-    norm = re.sub(r"\[[^\]]*\]", "[]", path.strip())
+def _path_note(segments: list) -> dict[str, str] | None:
+    """`parse_hint_path` のセグメント列に当たる注記（最も長い末尾一致）を返す。"""
+    norm = ""
+    for seg in segments:
+        norm += "[]" if seg is _ITEM else ("." if norm else "") + str(seg)
+    if norm.endswith("[]"):
+        norm = norm[:-2]
     best = None
     for key, note in _PATH_NOTES.items():
-        if norm == key or norm.endswith("." + key):
-            if best is None or len(key) > len(best[0]):
-                best = (key, note)
+        if (norm == key or norm.endswith("." + key)) and (best is None or len(key) > len(best[0])):
+            best = (key, note)
     return best[1] if best else None
 
 
@@ -398,7 +391,7 @@ def resolve_hint(schema: dict, path: str) -> dict:
     else:
         hint = {"oneOf": [_describe(schema, c) for c in candidates]}
     out = {"path": path, "hint": hint, "example": _example(schema, candidates, path)}
-    note = _path_note(path)
+    note = _path_note(segments)
     if note:
         out["meaning"] = note["meaning"]
         out["correct_example"] = note["correct"]

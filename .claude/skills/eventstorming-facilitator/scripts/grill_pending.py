@@ -23,7 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -47,8 +47,6 @@ def _parse_at(value) -> datetime | None:
     except ValueError:
         return None
     if dt.tzinfo is None:
-        from datetime import timezone
-
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
 
@@ -67,7 +65,6 @@ def load_answers(root: Path) -> list[dict]:
         if not doc.get("qid"):
             # doc_id（<qid>--<uid>）から qid を補う
             doc = {**doc, "qid": f.stem.split("--", 1)[0]}
-        doc.setdefault("_doc_id", f.stem)
         out.append(doc)
     return out
 
@@ -93,8 +90,13 @@ def pending(answers: list[dict], reflected: dict) -> list[dict]:
         if a_at and r_at and a_at > r_at:
             reason = "選び直し" if a.get("rev") or a.get("prev") else "反映後に更新"
             rows.append({**a, "_reason": reason})
-    rows.sort(key=lambda r: (_parse_at(r.get("at")) is None, r.get("at") or ""))
+    rows.sort(key=lambda r: _parse_at(r.get("at")) or datetime.max.replace(tzinfo=timezone.utc))
     return rows
+
+
+def _choices(row: dict) -> list:
+    """回答の選択（choices[] 優先、旧形式の choice 単一にも対応）。"""
+    return row.get("choices") or ([row["choice"]] if row.get("choice") else [])
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -112,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(
             [{"qid": r.get("qid"), "by": r.get("by"), "at": r.get("at"), "reason": r["_reason"],
-              "choices": r.get("choices") or ([r["choice"]] if r.get("choice") else []),
+              "choices": _choices(r),
               "text": r.get("text") or "", "hint": bool(r.get("hint")), "prev": r.get("prev")}
              for r in rows],
             ensure_ascii=False, indent=2,
@@ -120,7 +122,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     print(f"未反映の回答 {len(rows)} 件:")
     for r in rows:
-        choices = r.get("choices") or ([r["choice"]] if r.get("choice") else [])
+        choices = _choices(r)
         parts = [f"- {r.get('qid')}（{r['_reason']}・{r.get('at') or '時刻なし'}・{r.get('by') or '?'}）"]
         if r.get("hint"):
             parts.append("？（ヒント要求）")

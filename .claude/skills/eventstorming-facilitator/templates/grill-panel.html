@@ -179,7 +179,7 @@
   var S = {
     db: null, user: null, uid: null, canWrite: true,
     board: null, boardLoaded: false, reflected: {}, answers: [], names: {},
-    sel: [], redo: '', redoQ: null, busy: false, formErr: '',
+    sel: [], redo: '', busy: false, formErr: '',
     last: null,          // 直前に送った回答 {qid, line}
     notify: '',          // '' | 'sending' | 'ok' | {code, detail}
     notifiedAt: 0, unavailable: '', stale: false, viewKey: ''
@@ -208,8 +208,12 @@
   }
   function current() {
     var qs = questions();
-    for (var i = 0; i < qs.length; i++) if (S.redo && qs[i].qid === S.redo) return qs[i];
-    if (S.redo && S.redoQ && S.redoQ.qid === S.redo) return S.redoQ;
+    if (S.redo) {
+      // やり直し・選び直し中の質問。まだ答えていない質問のやり直し（直前の 1 問）は列から引く
+      var a = mine(S.redo);
+      if (a) return reselectQuestion(a);
+      for (var i = 0; i < qs.length; i++) if (qs[i].qid === S.redo) return qs[i];
+    }
     for (var j = 0; j < qs.length; j++) if (!mine(qs[j].qid)) return qs[j];
     return null;
   }
@@ -226,11 +230,11 @@
     };
   }
   function startReselect(a) {
-    S.redo = a.qid; S.redoQ = reselectQuestion(a); S.formErr = '';
+    S.redo = a.qid; S.formErr = '';
     render();
     try { root.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) {}
   }
-  function cancelReselect() { S.redo = ''; S.redoQ = null; S.formErr = ''; render(); }
+  function cancelReselect() { S.redo = ''; S.formErr = ''; render(); }
   function atOf(v) { var t = Date.parse(str(v)); return isNaN(t) ? 0 : t; }
   // 反映待ちか: qid が reflected に無い、または回答が反映より新しい（選び直された回答）
   function isPending(a) {
@@ -467,7 +471,7 @@
     var qid = S.last.qid;
     var stillAsked = questions().some(function (q) { return q.qid === qid; });
     if (S.canWrite && stillAsked && !S.reflected[qid] && S.redo !== qid) {
-      strip.appendChild(link('この回答をやり直す', 'grill-redo', function () { S.redo = qid; S.redoQ = null; S.formErr = ''; render(); }));
+      strip.appendChild(link('この回答をやり直す', 'grill-redo', function () { S.redo = qid; S.formErr = ''; render(); }));
     }
   }
 
@@ -496,13 +500,13 @@
   }
 
   // ---------- 反映エリア（質問エリアとは別に描く） ----------
-  var LATE_MS = 5 * 60 * 1000;   // これを超えて反映待ちなら「Claude が起きていないかも」と案内する
-  function ageText(ms) {
+  // 反映待ちがこれを超えたら「Claude が起きていないかも」と案内する。連続回答の通知をまとめる上限も同じ
+  var LATE_MS = 5 * 60 * 1000;
+  function durText(ms) {
     var m = Math.floor(ms / 60000);
-    if (m < 1) return 'たったいま届いた';
-    if (m < 60) return m + ' 分前に届いた';
-    return Math.floor(m / 60) + ' 時間前に届いた';
+    return m < 60 ? m + ' 分' : Math.floor(m / 60) + ' 時間';
   }
+  function ageText(ms) { return ms < 60000 ? 'たったいま届いた' : durText(ms) + '前に届いた'; }
   function drawModel() {
     if (!S.boardLoaded) { modelBox.hidden = true; return; }
     var wait = pending().filter(function (a) { return !a.hint; });
@@ -539,7 +543,7 @@
       modelList.appendChild(li);
     });
     if (oldest && now - oldest > LATE_MS) {
-      var late = el('p', 'gm-late', '届いてから ' + ageText(now - oldest).replace('前に届いた', '') +
+      var late = el('p', 'gm-late', '届いてから ' + durText(now - oldest) +
         'たっても反映が始まっていません。Claude が起きていないかもしれません。進行役の方に「回答した」と伝えてください。');
       if (S.canWrite && S.notify !== 'sending') {
         late.appendChild(document.createTextNode(' '));
@@ -576,15 +580,15 @@
       doc.prev = { choices: choicesOf(before), text: str(before.text), hint: !!before.hint, at: str(before.at) };
     }
     S.db.collection('answers').doc(q.qid + '--' + S.uid).set(doc).then(function () {
-      S.busy = false; S.redo = ''; S.redoQ = null; S.sel = [];
+      S.busy = false; S.redo = ''; S.sel = [];
       // スナップショット到着を待たずに次の質問へ進む
       S.answers = S.answers.filter(function (a) { return !(a.qid === doc.qid && a.by === doc.by); });
       S.answers.unshift(doc);
       S.last = { qid: doc.qid, line: answerLine(doc), prevLine: before && !before.hint ? answerLine(before) : '' };
       // 続けて答えているあいだは通知を 1 回にまとめる（Claude は起きるたびに未反映の回答をすべて読み、
-      // ターンの終わりにも未反映を確かめる）。前の通知から NOTIFY_MERGE_MS を過ぎたら改めて知らせる
+      // ターンの終わりにも未反映を確かめる）。前の通知から LATE_MS を過ぎたら改めて知らせる
       var waiting = pending().some(function (a) { return a.qid !== doc.qid; });
-      if (S.notify === 'ok' && waiting && Date.now() - S.notifiedAt < NOTIFY_MERGE_MS) render();
+      if (S.notify === 'ok' && waiting && Date.now() - S.notifiedAt < LATE_MS) render();
       else notifyClaude();
     }, function (e) {
       S.busy = false;
@@ -600,7 +604,6 @@
     });
   }
 
-  var NOTIFY_MERGE_MS = 5 * 60 * 1000;
   // コメントのスレッドは 1 本を使い回す（回答のたびにスレッドを増やさない）
   function savedThread() { try { return localStorage.getItem(THREAD_KEY) || ''; } catch (e) { return ''; } }
   function saveThread(id) { try { id ? localStorage.setItem(THREAD_KEY, id) : localStorage.removeItem(THREAD_KEY); } catch (e) {} }
@@ -648,7 +651,7 @@
 
   function start(db, user) {
     S.db = db; S.user = user;
-    setInterval(function () { if (pending().length) render(); }, 30000);   // 経過時間の表示を進める
+    setInterval(drawModel, 30000);   // 反映待ちの経過時間を進める（反映エリアだけ描き直す）
     var staleTimer = setTimeout(function () { S.stale = true; render(); }, 10000);
     function live() { clearTimeout(staleTimer); S.stale = false; }
 

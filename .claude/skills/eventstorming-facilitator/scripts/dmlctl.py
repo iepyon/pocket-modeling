@@ -107,6 +107,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from dml_filters.views import VIEWS  # noqa: E402
 from dml_filters.checks import CHECKS, finding_to_dict  # noqa: E402
+from dml_filters.shared import PHASES  # noqa: E402
 from dml_filters.refs import collect_refs, apply_rename  # noqa: E402
 from dml_filters.hints import resolve_hint  # noqa: E402
 
@@ -249,11 +250,11 @@ def _resolve_list(data, path: str) -> list:
     return target
 
 
-def _parse_value(text: str):
-    """`--value` に渡された YAML リテラルを Python 値に変換する。
+def _parse_value(text: str, prose_hint: bool = False):
+    """YAML リテラル（--value / --item / --where の値など）を Python 値に変換する。
 
-    YAML として読めない値（先頭が `**強調**` や `- ` の散文、` : ` を含む長文など）は
-    スタックトレースではなく、`--value-file`（生テキスト扱い）への案内つきで終了する。"""
+    YAML として読めないときは、スタックトレースではなく位置と原因を示して終了する。
+    `prose_hint=True`（散文を受けうる `--value`）のときは、`--value-file`（生テキスト扱い）も案内する。"""
     try:
         return yaml.safe_load(text)
     except yaml.YAMLError as e:
@@ -261,13 +262,14 @@ def _parse_value(text: str):
         mark = getattr(e, "problem_mark", None)
         where = f"（{mark.line + 1} 行 {mark.column + 1} 文字目）" if mark else ""
         problem = getattr(e, "problem", None) or str(e).splitlines()[0]
-        raise SystemExit(
-            f"❌ 値を YAML として読めません{where}: {problem}\n"
-            f"   値の先頭: {head!r}\n"
-            "   散文（先頭が `**` `- ` `*` `&` `!` `|` `>` の文、` : ` や `#` を含む長文）は YAML として誤読されます。\n"
-            "   → set / update なら `--value-file=<path>` を使ってください（中身を生テキストとして扱います）。\n"
-            "   → 短い値なら全体をクォートで囲んでください（例: --value='\"**境界の理由**: …\"'）。"
-        ) from None
+        msg = f"❌ 値を YAML として読めません{where}: {problem}\n   値の先頭: {head!r}"
+        if prose_hint:
+            msg += (
+                "\n   散文（先頭が `**` `- ` `*` `&` `!` `|` `>` の文、` : ` や `#` を含む長文）は YAML として誤読されます。"
+                "\n   → `--value-file=<path>` を使ってください（中身を生テキストとして扱います）。"
+                "\n   → 短い値なら全体をクォートで囲んでください（例: --value='\"**境界の理由**: …\"'）。"
+            )
+        raise SystemExit(msg) from None
 
 
 def _deep_merge(dst, patch: dict) -> None:
@@ -307,7 +309,7 @@ def _read_value_or_file(args, value_attr: str, file_attr: str):
     if file_path is not None:
         text = Path(file_path).read_text(encoding="utf-8")
         return text
-    return _parse_value(value)
+    return _parse_value(value, prose_hint=True)
 
 
 def _parse_where(where: str) -> tuple[str, object]:
@@ -360,7 +362,7 @@ def _save_and_postprocess(
         yml.dump(data, f)
     if no_postprocess:
         return 0
-    _run_postprocess(path)
+    _run_postprocess(path, data)
     return 0
 
 
@@ -399,8 +401,11 @@ def _dry_run_validate(yml, data, path: Path) -> int:
         tmp.unlink(missing_ok=True)
 
 
-def _run_postprocess(path: Path) -> None:
-    """build + validate を順に実行する。失敗は stderr に出すが exit code は引き継がない。"""
+def _run_postprocess(path: Path, data=None) -> None:
+    """build + validate を順に実行し、書き込み後の警告チェックを出す。
+
+    失敗は stderr に出すが exit code は引き継がない。`data` は書き込んだ内容（メモリ上の
+    モデル）。警告チェックはこれを使い、ファイルを読み直さない。"""
     try:
         subprocess.run(["python3", str(BUILD_SCRIPT), str(path)], check=False)
     except FileNotFoundError:
@@ -421,31 +426,28 @@ def _run_postprocess(path: Path) -> None:
             )
     except FileNotFoundError:
         print(f"⚠ validate スクリプトが見つかりません: {VALIDATE_SCRIPT}", file=sys.stderr)
-    _warn_language_coverage(path)
+    if isinstance(data, dict):
+        _warn_after_write(data)
 
 
-def _warn_language_coverage(path: Path, limit: int = 5) -> None:
-    """日本語ラベルの登録漏れ（language_coverage）を警告として出す。終了コードには影響しない。
+# 書き込みのたびに件数だけ知らせる構造チェック（終了コードには影響しない）。
+# schema 検証だけでは `check --all` まで表に出ず、HTML が英語の識別子のまま出る原因になるもの。
+_POST_WRITE_CHECKS = {
+    "undeclared_ctx": "contexts[] に宣言されていない ctx",
+    "language_coverage": "日本語ラベル未登録（contexts[].lang）— HTML では英語の識別子のまま表示されます",
+}
 
-    schema 検証だけだとラベル抜けが `check --all` まで表に出ず、HTML が英語の識別子のまま
-    になっていることに気づけないため、書き込みのたびに件数だけ知らせる。"""
-    try:
-        model = load_model(path)
-    except Exception:  # noqa: BLE001 — 壊れた YAML は validate 側が報告済み
-        return
-    if not isinstance(model, dict):
-        return
-    findings = CHECKS["language_coverage"](model)
-    if not findings:
-        return
-    print(
-        f"⚠ 日本語ラベル未登録 {len(findings)} 件（contexts[].lang）— HTML では英語の識別子のまま表示されます",
-        file=sys.stderr,
-    )
-    for f in findings[:limit]:
-        print(f"   - {f.message}", file=sys.stderr)
-    if len(findings) > limit:
-        print(f"   …ほか {len(findings) - limit} 件（dmlctl check <file> --check=language_coverage）", file=sys.stderr)
+
+def _warn_after_write(model: dict, limit: int = 5) -> None:
+    for name, title in _POST_WRITE_CHECKS.items():
+        findings = CHECKS[name](model)
+        if not findings:
+            continue
+        print(f"⚠ {title}: {len(findings)} 件", file=sys.stderr)
+        for f in findings[:limit]:
+            print(f"   - {f.message}", file=sys.stderr)
+        if len(findings) > limit:
+            print(f"   …ほか {len(findings) - limit} 件（dmlctl check <file> --check={name}）", file=sys.stderr)
 
 
 # ============================================================
@@ -540,7 +542,7 @@ def cmd_init(args) -> int:
 
     print(f"✅ {path} を作成しました（session id={args.session_id}）")
     if not args.no_postprocess:
-        _run_postprocess(path)
+        _run_postprocess(path, data)
     return 0
 
 
@@ -581,27 +583,6 @@ def _toplevel_keys() -> list[str]:
         return keys or fallback
     except Exception:
         return fallback
-
-
-def _warn_undeclared_ctx(data, item: dict) -> None:
-    """scenarios に足す要素の ctx が contexts[] に宣言されていなければ警告する（書き込みは止めない）。
-
-    日本語ラベルの置き場 `contexts[].lang` は BC の下にあるため、BC が無いとラベルを
-    登録できず、HTML のフロー図が英語の識別子のまま出る。"""
-    ctx = item.get("ctx")
-    if not ctx:
-        return
-    declared = {
-        c.get("name") for c in (data.get("contexts") or []) if isinstance(c, dict)
-    }
-    if ctx in declared:
-        return
-    print(
-        f"⚠ ctx '{ctx}' は contexts[] に宣言されていません。日本語ラベル（contexts[].lang）の置き場がなく、\n"
-        f"   HTML のフロー図が英語の識別子のまま表示されます。仮の BC を先に作ってください:\n"
-        f"   dmlctl add <file> --to=contexts --item='{{name: {ctx}, label_ja: <日本語名>}}'",
-        file=sys.stderr,
-    )
 
 
 def cmd_add(args) -> int:
@@ -659,8 +640,6 @@ def cmd_add(args) -> int:
         item = _parse_value(text)
     else:
         item = _parse_value(args.item)
-    if len(segments) == 1 and last == "scenarios" and isinstance(item, dict):
-        _warn_undeclared_ctx(data, item)
     target.append(item)
     print(f"✅ {args.to} に 1 件追加しました（計 {len(target)} 件）", file=sys.stderr)
     return _save(path, yml, data, args)
@@ -830,15 +809,12 @@ def cmd_rename(args) -> int:
 
 
 # schema が読めない場合のフォールバック（真実源は dml.schema.yaml の session.phase enum）
-_PHASE_ENUM_FALLBACK = ["1", "2", "3", "4", "4.5", "4.6", "5", "6", "7"]
-
-
 def _phase_enum() -> list[str]:
     try:
         enum = _load_schema()["$defs"]["session"]["properties"]["phase"]["enum"]
         return [str(v) for v in enum]
     except Exception:
-        return _PHASE_ENUM_FALLBACK
+        return list(PHASES)
 
 
 def cmd_advance(args) -> int:
@@ -897,8 +873,6 @@ def cmd_derive_agg_events(args) -> int:
     if args.agg and not targets:
         print(f"❌ aggregates[] に '{args.agg}' がありません", file=sys.stderr)
         return 2
-    from ruamel.yaml.comments import CommentedMap, CommentedSeq  # type: ignore
-
     total = 0
     for agg in targets:
         name = agg.get("name")
@@ -919,11 +893,8 @@ def cmd_derive_agg_events(args) -> int:
         if not missing:
             continue
         if agg.get("events") is None:
-            agg["events"] = CommentedSeq()
-        for ev in missing:
-            m = CommentedMap()
-            m["name"] = ev
-            agg["events"].append(m)
+            agg["events"] = []
+        agg["events"].extend({"name": ev} for ev in missing)
         total += len(missing)
         print(f"✅ {name}.events に {len(missing)} 件追加: {', '.join(missing)}", file=sys.stderr)
     if total == 0:

@@ -2,7 +2,7 @@
 
 > **対応状況（2026-11-28）** — ✅ A・B・C は反映済み。
 > - A: フェーズ 3 で仮の `ctx` を書くときは、同じターンに `contexts[]` へ仮の BC を作る。cmd・evt・actor も `lang` に同時に登録する（SKILL.md・フェーズ表）
-> - B: `dmlctl add --to=scenarios` は、`contexts[]` に無い `ctx` で警告する。書き込みの後処理で、日本語ラベル未登録の件数を警告する。`language_coverage` は actor も見る（warn）。`--label-cmd` などの 1 コマンド化は見送った（警告と手順で足りるため）
+> - B: `contexts[]` に無い `ctx` は、構造チェック `undeclared_ctx`（warn）が検出し、書き込みの後処理でも警告する（`add` に限らず `set` / `update` でも、policies / aggregates / queries の `ctx` でも出る）。書き込みの後処理で、日本語ラベル未登録の件数を警告する。`language_coverage` は、フロー図の付箋に出る actor・分岐の evt・qry も見る（warn）。`--label-cmd` などの 1 コマンド化は見送った（警告と手順で足りるため）
 > - C: 付箋に「訳未登録」の印、ページ上部に「日本語ラベル未登録: N 件」を出す。レーン見出しは BC の `label_ja` を併記する
 
 コーヒーショップのセッション（`eventstorming-20261128-1105`）で、オーナーから出た指摘。

@@ -213,9 +213,32 @@ class LanguageCoverageActorTest(unittest.TestCase):
         self.assertEqual(language_coverage(model), [])
 
 
+class UndeclaredCtxTest(unittest.TestCase):
+    def test_reports_each_ctx_once(self):
+        model = {
+            "contexts": [{"name": "billing"}],
+            "scenarios": [sc("a", "A", "E", ctx="ordering"), sc("b", "B", "F", ctx="ordering"),
+                          sc("c", "C", "G", ctx="billing")],
+            "policies": [{"name": "P", "ctx": "ops", "trg": "E"}],
+        }
+        f = CHECKS["undeclared_ctx"](model)
+        self.assertEqual(sorted(x.slice["ctx"] for x in f), ["ops", "ordering"])
+        self.assertTrue(all(x.severity == "warn" for x in f))
+
+
+class LanguageCoverageFlowIdsTest(unittest.TestCase):
+    def test_branch_evt_and_qry_are_warned(self):
+        model = {
+            "contexts": [{"name": "bc", "lang": {"cmds": {"A": "a"}, "actors": {"System": "システム"}}}],
+            "scenarios": [sc("x", "A", brs=[{"evt": "Ok"}, {"evt": "Ng"}], qry=["Stock"])],
+        }
+        got = sorted((x.slice["identifier"], x.severity) for x in language_coverage(model))
+        self.assertEqual(got, [("Ng", "warn"), ("Ok", "warn"), ("Stock", "warn")])
+
+
 class RegistryTest(unittest.TestCase):
     def test_new_checks_registered(self):
-        for name in ("alt_narrative_entry", "unreachable_scenario", "next_bypasses_policy",
+        for name in ("undeclared_ctx", "alt_narrative_entry", "unreachable_scenario", "next_bypasses_policy",
                      "policy_scenario_overlap", "phase_drift"):
             self.assertIn(name, CHECKS)
         self.assertIn("ai-decided", VIEWS)
@@ -269,7 +292,7 @@ class ValidateMessageTest(unittest.TestCase):
         dml = yaml.safe_dump({"aggregates": [{"name": "A", "ctx": "bc",
                                               "events": [{"name": "E", "params": ["orderId"]}]}]})
         errs = validate_dml_text(dml, SCHEMA)
-        self.assertTrue(any("{name: orderId, type: string}" in e for e in errs), errs)
+        self.assertTrue(any("{name: orderId}" in e for e in errs), errs)
 
 
 def _dmlctl(*args):
@@ -292,17 +315,24 @@ class DmlctlTest(unittest.TestCase):
         self.assertIn("--value-file", r.stderr)
         self.assertNotIn("Traceback", r.stderr)
 
-    def test_undeclared_ctx_warning(self):
+    def test_undeclared_ctx_warning_after_write(self):
         r = _dmlctl("add", self.file, "--to=scenarios",
-                    "--item={name: 注文する, ctx: ordering, actor: Customer, cmd: PlaceOrder, evt: OrderPlaced}",
-                    "--no-postprocess")
+                    "--item={name: 注文する, ctx: ordering, actor: Customer, cmd: PlaceOrder, evt: OrderPlaced}")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("ctx 'ordering' は contexts[] に宣言されていません", r.stderr)
-        _dmlctl("add", self.file, "--to=contexts", "--item={name: billing, label_ja: 請求}", "--no-postprocess")
-        r = _dmlctl("add", self.file, "--to=scenarios",
-                    "--item={name: 請求する, ctx: billing, actor: System, cmd: Bill, evt: Billed}",
-                    "--no-postprocess")
+        self.assertIn("日本語ラベル未登録", r.stderr)
+        r = _dmlctl("add", self.file, "--to=contexts",
+                    "--item={name: ordering, label_ja: 注文, lang: {cmds: {PlaceOrder: 注文する}, "
+                    "evts: {OrderPlaced: 注文された}, actors: {Customer: 客}}}")
         self.assertNotIn("宣言されていません", r.stderr)
+        self.assertNotIn("日本語ラベル未登録", r.stderr)
+
+    def test_where_parse_error_does_not_suggest_value_file(self):
+        _dmlctl("add", self.file, "--to=scenarios", "--item={name: a, ctx: bc, actor: A, cmd: X}", "--no-postprocess")
+        r = _dmlctl("remove", self.file, "--path=scenarios", "--where=name=**x", "--no-postprocess")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("YAML として読めません", r.stderr)
+        self.assertNotIn("--value-file", r.stderr)
 
     def test_derive_agg_events(self):
         _dmlctl("add", self.file, "--to=scenarios",

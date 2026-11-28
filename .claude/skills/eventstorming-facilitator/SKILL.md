@@ -251,7 +251,7 @@ DML は **`docs/eventstorming/<session>.dml.yaml`** 1 ファイルに **YAML 直
 
 出力タイミングと対象フィールドは冒頭「ワークフロー（9フェーズ）」の表を参照。加えて：
 
-- **フェーズ 3 の `ctx` は仮置きで良い。ただし仮の BC を同じターンに `contexts[]` へ作る**: `scenarios[].ctx` は schema 必須だが、BC 境界はフェーズ 4.5 で確定するので、フェーズ 3 では暫定 slug（例 `ordering` `payment`）で仮置きしてよい。**その slug の BC を、シナリオを足すのと同じターンに `contexts[]` へ宣言する**（`d add <f> --to=contexts --item='{name: ordering, label_ja: 注文}'` だけでよい）。日本語ラベルの置き場 `contexts[].lang` は BC の下にあるので、BC が無いとラベルを書けず、HTML のフロー図が英語の識別子のまま出る。`contexts[]` に無い `ctx` でシナリオを足すと dmlctl が警告する。4.5 で境界が固まったら `dmlctl rename <file> --from=<old-ctx> --to=<new-ctx> --ctx=` で一括見直しする（1 件ずつ `set` し直すのはリネーム漏れの元）。
+- **フェーズ 3 の `ctx` は仮置きで良い。ただし仮の BC を同じターンに `contexts[]` へ作る**: `scenarios[].ctx` は schema 必須だが、BC 境界はフェーズ 4.5 で確定するので、フェーズ 3 では暫定 slug（例 `ordering` `payment`）で仮置きしてよい。**その slug の BC を、シナリオを足すのと同じターンに `contexts[]` へ宣言する**（`d add <f> --to=contexts --item='{name: ordering, label_ja: 注文}'` だけでよい）。日本語ラベルの置き場 `contexts[].lang` は BC の下にあるので、BC が無いとラベルを書けず、HTML のフロー図が英語の識別子のまま出る。`contexts[]` に無い `ctx` は、書き込みの後処理と構造チェック `undeclared_ctx` が警告する。4.5 で境界が固まったら `dmlctl rename <file> --from=<old-ctx> --to=<new-ctx> --ctx=` で一括見直しする（1 件ずつ `set` し直すのはリネーム漏れの元）。
 - **シナリオを足したら lang にも同時登録**: `cmd` / `evt` / `actor` を新しく使ったら、所属 BC の `contexts[].lang.cmds` / `lang.evts` / `lang.actors` に日本語ラベルを**同じターンに**登録する。シナリオ追加とラベル登録の塊が終わるたびに `dmlctl check <file> --check=language_coverage` を回す。
 - **フェーズ 5 の `rules`/`errs` は全 scenario 義務ではない**: goal に直結し、不変条件・業務エラーが業務価値を持つ scenario に絞る。単純な CRUD・導線 scenario は空でよい。`dmlctl view --view=coverage` に出る残欠は「意図的に許容した箇所」と「未着手」を区別して読む（残欠＝バグではない）。詳細: playbook §3。
 - **`decisions[]` はフェーズを問わず随時 add する**: フェーズ 1〜5 の途中で決まった選択（イベントを畳む／分ける、境界の引き方、精算の形など）はその場で記録する。フェーズ 6 は棚卸し専用。
